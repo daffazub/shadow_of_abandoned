@@ -8,6 +8,7 @@ import { EventSystem } from "./systems/EventSystem.js";
 import { SceneManager } from "./systems/SceneManager.js";
 import { EnvironmentManager } from "./systems/EnvironmentManager.js";
 import { OpeningSequence } from "./systems/OpeningSequence.js";
+import { PropLibrary } from "./systems/PropLibrary.js";
 
 // Nama area yang tampil di HUD. Kunci = nama scene yang dimuat SceneManager.
 const SCENE_NAMES = {
@@ -49,6 +50,7 @@ class Game {
 		this.systems.assetManager = new AssetManager(this.scene);
 		this.systems.audioManager = new AudioManager(this.scene);
 		this.systems.eventSystem = new EventSystem();
+		this.systems.propLibrary = new PropLibrary(this.scene);
 		this.systems.sceneManager = new SceneManager(this.scene, this.systems);
 		this.systems.environmentManager = new EnvironmentManager(
 			this.scene,

@@ -13,7 +13,7 @@ export class InteractionManager {
         this.interactables = new Map();
         this.currentInteractable = null;
         this.interactionRange = 3.0;
-        this.lookThreshold = 0.92; // seberapa lurus pemain harus menghadap objek (1 = tepat lurus)
+        this.lookThreshold = 0.92; // seberapa lurus pemain harus menghadap objek kecil (1 = tepat lurus)
 
         // Inventory berupa Map supaya cocok dengan HUD di main.js (memakai .size)
         this.inventory = new Map();
@@ -38,7 +38,7 @@ export class InteractionManager {
             if (e.key.toLowerCase() === 'p' && this.scene.activeCamera) {
                 const p = this.scene.activeCamera.position;
                 console.log(
-                    `Posisi: new Vector3(${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)})`
+                    `Posisi: x=${p.x.toFixed(1)}, y=${p.y.toFixed(1)}, z=${p.z.toFixed(1)}`
                 );
             }
         });
@@ -82,14 +82,19 @@ export class InteractionManager {
         mesh.checkCollisions = false;
 
         const pos = position.clone();
+        let surfaceY = pos.y;
         if (snapToFloor) {
             const downRay = new Ray(position, new Vector3(0, -1, 0), 10);
             const hit = this.scene.pickWithRay(
                 downRay,
-                (m) => m.isPickable && !(m.metadata && m.metadata.isPickup)
+                (m) =>
+                    m.isPickable &&
+                    m.checkCollisions &&
+                    !(m.metadata && (m.metadata.isPickup || m.metadata.isDecor))
             );
             if (hit && hit.hit && hit.pickedPoint) {
-                pos.y = hit.pickedPoint.y + 0.25;
+                surfaceY = hit.pickedPoint.y;
+                pos.y = surfaceY + 0.25;
             }
         }
         mesh.position = pos;
@@ -101,6 +106,7 @@ export class InteractionManager {
         mesh.material = material;
 
         this.registerInteractable(mesh, 'battery', { id, amount, spin: true });
+        this.systems.propLibrary.attach('battery', mesh, { surfaceY });
         return mesh;
     }
 
@@ -126,6 +132,7 @@ export class InteractionManager {
     }
 
     removePickup(interactable) {
+        this.systems.propLibrary?.removeHighlight(interactable.mesh);
         interactable.mesh.dispose();
         this.interactables.delete(interactable.mesh.id);
     }
@@ -194,18 +201,8 @@ export class InteractionManager {
             }
             if (!interactable.isActive) return;
 
-            const target = interactable.mesh.getAbsolutePosition();
-            const toTarget = target.subtract(origin);
-            const distance = toTarget.length();
-            if (distance > this.interactionRange || distance < 0.001) return;
-
-            const dir = toTarget.scale(1 / distance);
-
-            // Pemain harus menghadap ke arah objek
-            if (Vector3.Dot(forward, dir) < this.lookThreshold) return;
-
-            // Tidak boleh terhalang dinding
-            if (!this.hasLineOfSight(origin, dir, distance, interactable.mesh)) return;
+            const distance = this.getLookDistance(interactable, origin, forward);
+            if (distance === null) return;
 
             if (distance < closestDistance) {
                 closestInteractable = interactable;
@@ -215,6 +212,42 @@ export class InteractionManager {
 
         this.updateInteractionUI(closestInteractable);
         this.currentInteractable = closestInteractable;
+    }
+
+    /**
+     * Mengembalikan jarak ke objek jika pemain sedang melihatnya, atau null.
+     * - Objek besar (pintu, generator): pemain harus mengarah ke permukaannya.
+     * - Objek kecil (dokumen, kunci): cukup menghadap ke arahnya (lebih mudah).
+     */
+    getLookDistance(interactable, origin, forward) {
+        const mesh = interactable.mesh;
+        if (!mesh.isEnabled()) return null;
+
+        const ext = mesh.getBoundingInfo().boundingBox.extendSizeWorld;
+        const isLarge = Math.max(ext.x, ext.y, ext.z) > 0.8;
+
+        if (isLarge) {
+            const ray = new Ray(origin, forward, this.interactionRange + 0.5);
+            const hit = this.scene.pickWithRay(
+                ray,
+                (m) => m.isPickable && m.isEnabled() && m.isVisible
+            );
+            if (hit && hit.hit && hit.pickedMesh === mesh && hit.distance <= this.interactionRange) {
+                return hit.distance;
+            }
+            return null;
+        }
+
+        const target = mesh.getAbsolutePosition();
+        const toTarget = target.subtract(origin);
+        const distance = toTarget.length();
+        if (distance > this.interactionRange || distance < 0.001) return null;
+
+        const dir = toTarget.scale(1 / distance);
+        if (Vector3.Dot(forward, dir) < this.lookThreshold) return null;
+        if (!this.hasLineOfSight(origin, dir, distance, mesh)) return null;
+
+        return distance;
     }
 
     hasLineOfSight(origin, dir, distance, mesh) {
@@ -244,8 +277,12 @@ export class InteractionManager {
 
     getInteractionText(interactable) {
         switch (interactable.type) {
-            case 'door':
-                return interactable.data.locked ? 'Locked' : 'Press E to open';
+            case 'door': {
+                const d = interactable.data;
+                if (!d.locked) return 'Press E to open';
+                if (this.hasItem('key', d.keyId)) return 'Press E to unlock';
+                return d.requiresName ? `Locked - needs ${d.requiresName}` : 'Locked';
+            }
             case 'note':
                 return 'Press E to read';
             case 'key':
@@ -289,31 +326,52 @@ export class InteractionManager {
     }
 
     interactWithDoor(interactable) {
-        if (interactable.data.locked) {
-            // Sebelumnya memakai playerController.hasKey yang tidak ada,
-            // sehingga pintu tidak pernah terbuka. Sekarang memakai inventory.
-            if (this.hasItem('key', interactable.data.keyId)) {
-                interactable.data.locked = false;
-                this.systems.audioManager.playSound('door_creak');
-                this.systems.eventSystem.emit('door_unlocked', interactable.data);
-                this.showMessage('Door unlocked');
-                return true;
+        const data = interactable.data;
+
+        if (data.locked) {
+            if (this.hasItem('key', data.keyId)) {
+                data.locked = false;
+                this.systems.eventSystem.emit('door_unlocked', data);
+                this.showMessage('Unlocked');
+                // lanjut membuka pintu di bawah
             } else {
                 this.systems.audioManager.playSound('door_locked');
-                this.showMessage('The door is locked');
+                this.showMessage(
+                    data.requiresName ? `Locked - you need the ${data.requiresName}` : 'The door is locked'
+                );
                 return false;
             }
-        } else {
-            this.systems.audioManager.playSound('door_creak');
-            this.systems.eventSystem.emit('door_opened', interactable.data);
-
-            // Simple door opening animation
-            if (!interactable.data.isOpen) {
-                interactable.mesh.rotation.y += Math.PI / 2;
-                interactable.data.isOpen = true;
-            }
-            return true;
         }
+
+        this.systems.audioManager.playSound('door_creak');
+        this.systems.eventSystem.emit('door_opened', data);
+        this.openDoor(interactable);
+        return true;
+    }
+
+    // Pintu bergeser naik ke atas, lalu hilang. Tabrakan dimatikan seketika
+    // supaya pemain bisa lewat dan tidak tersangkut di pintu yang berputar.
+    openDoor(interactable) {
+        const mesh = interactable.mesh;
+        interactable.isActive = false;
+        interactable.data.isOpen = true;
+        mesh.checkCollisions = false;
+
+        const startY = mesh.position.y;
+        const height = (interactable.data.size && interactable.data.size.h) || 3;
+        const endY = startY + height + 0.2;
+        let t = 0;
+
+        const observer = this.scene.onBeforeRenderObservable.add(() => {
+            t += this.scene.getEngine().getDeltaTime() / 1000 / 1.2;
+            const k = Math.min(1, t);
+            const eased = 1 - Math.pow(1 - k, 3);
+            mesh.position.y = startY + (endY - startY) * eased;
+            if (k >= 1) {
+                this.scene.onBeforeRenderObservable.remove(observer);
+                mesh.setEnabled(false);
+            }
+        });
     }
 
     interactWithNote(interactable) {
@@ -344,6 +402,7 @@ export class InteractionManager {
 
         // Add to inventory
         this.addToInventory('key', interactable.data);
+        this.showMessage(`Picked up: ${interactable.data.name || 'key'}`);
 
         // Remove from scene
         this.removePickup(interactable);
@@ -403,5 +462,6 @@ export class InteractionManager {
 
     dispose() {
         this.interactables.clear();
+        this.currentInteractable = null;
     }
 }

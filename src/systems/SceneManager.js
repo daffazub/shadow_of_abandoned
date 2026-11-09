@@ -3,10 +3,39 @@ import {
 	MeshBuilder,
 	StandardMaterial,
 	Color3,
-	Texture,
 	SceneLoader,
+	Ray,
 } from "@babylonjs/core";
 import { LevelBuilder } from "./LevelBuilder.js";
+
+// Ketinggian titik awal sinar yang mencari lantai (di bawah langit-langit).
+// Naikkan jika langit-langit koridor Anda lebih tinggi dari 3 unit.
+const FLOOR_PROBE_HEIGHT = 2.5;
+const TABLE_HEIGHT = 0.8;
+
+/**
+ * KOORDINAT ITEM DI SCENE "horror_scene"
+ * Hanya x dan z yang perlu diatur. Ketinggian (y) dihitung otomatis dari lantai.
+ * Koridor berjalan ke arah +z (pemain mulai di z = -5).
+ *
+ * Cara mencari koordinat: berjalan ke tempat yang diinginkan, tekan tombol P,
+ * lalu lihat konsol (F12). Salin nilai x dan z ke sini.
+ */
+const HORROR_LAYOUT = {
+	wardKey: { x: 1.2, z: 2.0 }, // Kunci #1 (Scene 1)
+	wardGate: { x: 0, z: 6.0 }, // Gerbang #1, butuh kunci #1
+	noticeDoc: { x: -1.2, z: 8.5 }, // Dokumen #1 (Scene 2)
+	battery1: { x: 1.0, z: 9.5 }, // Baterai (Scene 3)
+	encounter1: { x: 0, z: 11.0 }, // Pertemuan pertama dengan entitas
+	diaryDoc: { x: 1.2, z: 12.0 }, // Dokumen #2 (Scene 3)
+	battery2: { x: -1.0, z: 13.5 }, // Baterai (Scene 3)
+	experimentDoc: { x: -1.2, z: 16.0 }, // Dokumen #3 (Scene 4)
+	encounter2: { x: 0, z: 17.5 }, // Pertemuan kedua dengan entitas
+	restrictedKey: { x: 1.2, z: 18.0 }, // Kunci #2 (Scene 4)
+	restrictedGate: { x: 0, z: 20.5 }, // Gerbang #2, butuh kunci #2
+	gateWidth: 3.6, // lebar gerbang; samakan dengan lebar koridor
+	gateHeight: 3.2, // tinggi gerbang; samakan dengan tinggi koridor
+};
 
 export class SceneManager {
 	constructor(scene, systems) {
@@ -16,37 +45,133 @@ export class SceneManager {
 		this.sceneData = new Map();
 		this.levelBuilder = new LevelBuilder(scene, systems);
 
+		// Pelacak objek yang dibuat per scene, supaya bisa dibersihkan
+		this.sceneObjects = [];
+		this.triggerObservers = [];
+		this.objectCounter = 0;
+		this.tableMaterial = null;
+
 		this.initializeScenes();
 	}
 
 	initializeScenes() {
-		// Define scene layouts and content
-		// Initial horror scene
+		const L = HORROR_LAYOUT;
+
+		// ---------------------------------------------------------------
+		// SCENE UTAMA (saat ini): koridor dengan alur Scene 1-4 storyboard
+		// ---------------------------------------------------------------
 		this.sceneData.set("horror_scene", {
-			name: "Horror Corridor",
+			name: "Abandoned Ward",
 			playerStart: new Vector3(0, 4, -5),
 			environment: "horror_scene_glb",
 			lighting: "atmospheric",
 			interactables: [
+				// --- Scene 1: kunci pertama ---
+				{
+					type: "key",
+					snapToFloor: true,
+					position: new Vector3(L.wardKey.x, 0, L.wardKey.z),
+					data: { id: "ward_key", name: "Ward Gate Key", spin: true },
+				},
+				{
+					type: "door",
+					snapToFloor: true,
+					position: new Vector3(L.wardGate.x, 0, L.wardGate.z),
+					data: {
+						id: "ward_gate",
+						locked: true,
+						keyId: "ward_key",
+						requiresName: "Ward Gate Key",
+						size: { w: L.gateWidth, h: L.gateHeight, d: 0.2 },
+					},
+				},
+
+				// --- Scene 2: dokumen #1 ---
 				{
 					type: "note",
-					position: new Vector3(1.5, 1, 10),
+					snapToFloor: true,
+					position: new Vector3(L.noticeDoc.x, 0, L.noticeDoc.z),
 					data: {
-						title: "Welcome to the Asylum",
+						id: "doc_notice",
+						title: "Notice of Closure",
 						content:
-							"You have entered the abandoned Blackwood Asylum. The shadows here hold dark secrets. Find the truth before it finds you.",
+							"By order of the County Board, Blackwood Asylum is closed effective immediately. All remaining staff are to leave the premises. Morning roll call on November 16th: 127 patients and 31 staff on the register. Not one of them answered. Do not search for them. - Administration",
+					},
+				},
+
+				// --- Scene 3: baterai dan dokumen #2 ---
+				{
+					type: "battery",
+					position: new Vector3(L.battery1.x, 0, L.battery1.z),
+					data: { amount: 30 },
+				},
+				{
+					type: "note",
+					snapToFloor: true,
+					position: new Vector3(L.diaryDoc.x, 0, L.diaryDoc.z),
+					data: {
+						id: "doc_diary",
+						title: "Patient Diary - Bed 14",
+						content:
+							"They say the dark is empty. It is not. It waits until the light grows weak, and then it walks closer. I counted its footsteps last night. Keep the lamp burning, Marta. Whatever you do, never let the light go out.",
+					},
+				},
+				{
+					type: "battery",
+					position: new Vector3(L.battery2.x, 0, L.battery2.z),
+					data: { amount: 30 },
+				},
+
+				// --- Scene 4: dokumen #3 dan kunci area terlarang ---
+				{
+					type: "note",
+					snapToFloor: true,
+					position: new Vector3(L.experimentDoc.x, 0, L.experimentDoc.z),
+					data: {
+						id: "doc_experiment",
+						title: "Dr. Hartwell - Experiment 9",
+						content:
+							"The mind-warping trial has failed. The patients did not lose their minds; their minds were taken from them. Something answered through the apparatus, something that cannot exist in the light. I have sealed the lower wing and left the key where only the desperate would look.",
+					},
+				},
+				{
+					type: "key",
+					snapToFloor: true,
+					position: new Vector3(L.restrictedKey.x, 0, L.restrictedKey.z),
+					data: { id: "restricted_key", name: "Restricted Wing Key", spin: true },
+				},
+				{
+					type: "door",
+					snapToFloor: true,
+					position: new Vector3(L.restrictedGate.x, 0, L.restrictedGate.z),
+					data: {
+						id: "restricted_gate",
+						locked: true,
+						keyId: "restricted_key",
+						requiresName: "Restricted Wing Key",
+						size: { w: L.gateWidth, h: L.gateHeight, d: 0.2 },
 					},
 				},
 			],
 			triggers: [
 				{
-					position: new Vector3(0, 0, 5),
-					radius: 2,
+					position: new Vector3(L.encounter1.x, 0, L.encounter1.z),
+					radius: 3,
 					event: "entity_encounter",
 					data: { intensity: 1 },
 				},
+				{
+					position: new Vector3(L.encounter2.x, 0, L.encounter2.z),
+					radius: 3,
+					event: "entity_encounter",
+					data: { intensity: 2 },
+				},
 			],
 		});
+
+		// ---------------------------------------------------------------
+		// SCENE LAIN: belum dipakai, dikerjakan di Tahap C
+		// ---------------------------------------------------------------
 		this.sceneData.set("asylum_entrance", {
 			name: "Asylum Entrance",
 			playerStart: new Vector3(0, 5, -8),
@@ -272,6 +397,10 @@ export class SceneManager {
 		});
 	}
 
+	// ---------------------------------------------------------------
+	// MEMUAT SCENE
+	// ---------------------------------------------------------------
+
 	async loadScene(sceneName) {
 		const sceneData = this.sceneData.get(sceneName);
 		if (!sceneData) {
@@ -295,6 +424,9 @@ export class SceneManager {
 		// Setup lighting
 		this.setupLighting(sceneData.lighting);
 
+		// GLB dipanaskan sekali sebelum pembuatan anchor yang sinkron.
+		await this.systems.propLibrary.preload();
+
 		// Create interactables
 		this.createInteractables(sceneData.interactables);
 
@@ -316,14 +448,11 @@ export class SceneManager {
 	}
 
 	async loadEnvironment(environmentType) {
-		// Create comprehensive asylum environment
-		if (environmentType === "full_asylum") {
-			await this.createFullAsylum();
-		} else if (environmentType === "horror_scene_glb") {
+		if (environmentType === "horror_scene_glb") {
 			await this.loadHorrorSceneGLB();
 		} else {
-			// Fallback to basic room
-			await this.createBasicRoom();
+			// "full_asylum" dan lainnya: coba GLB, jika gagal pakai koridor prosedural
+			await this.createFullAsylum();
 		}
 	}
 
@@ -345,11 +474,6 @@ export class SceneManager {
 			result.meshes.forEach((mesh, index) => {
 				if (mesh.name && mesh.geometry) {
 					mesh.checkCollisions = true;
-					console.log(
-						`✓ Collision enabled for mesh: ${
-							mesh.name
-						} (${mesh.getTotalVertices()} vertices)`
-					);
 
 					// Ensure proper material for visibility
 					if (!mesh.material) {
@@ -360,7 +484,6 @@ export class SceneManager {
 						material.diffuseColor = new Color3(0.4, 0.4, 0.4);
 						material.specularColor = new Color3(0.1, 0.1, 0.1);
 						mesh.material = material;
-						console.log(`✓ Material applied to mesh: ${mesh.name}`);
 					}
 				}
 			});
@@ -370,7 +493,6 @@ export class SceneManager {
 				const rootMesh = result.meshes[0];
 				rootMesh.position = Vector3.Zero();
 				rootMesh.scaling = new Vector3(1, 1, 1);
-				console.log(`✓ Horror corridor positioned at:`, rootMesh.position);
 			}
 
 			// Add collision test markers (invisible in production)
@@ -398,13 +520,16 @@ export class SceneManager {
 		this.scene.getEngine().hideLoadingUI();
 	}
 
+	// ---------------------------------------------------------------
+	// KORIDOR PROSEDURAL (cadangan jika file GLB gagal dimuat)
+	// ---------------------------------------------------------------
+
 	createAsylumCorridor() {
-		// Enhanced horror corridor with proper collision
 		const corridorLength = 60;
 		const corridorWidth = 4;
 		const corridorHeight = 4;
 
-		// Floor with horror texture
+		// Floor
 		const floor = MeshBuilder.CreateGround(
 			"corridor_floor",
 			{ width: corridorWidth, height: corridorLength },
@@ -417,12 +542,11 @@ export class SceneManager {
 		floorMaterial.specularColor = new Color3(0.1, 0.1, 0.1);
 		floor.material = floorMaterial;
 
-		// Walls with proper collision
+		// Walls
 		const wallMaterial = new StandardMaterial("wallMaterial", this.scene);
 		wallMaterial.diffuseColor = new Color3(0.3, 0.35, 0.3);
 		wallMaterial.specularColor = new Color3(0.05, 0.05, 0.05);
 
-		// Left wall
 		const leftWall = MeshBuilder.CreateBox(
 			"leftWall",
 			{ width: 0.2, height: corridorHeight, depth: corridorLength },
@@ -436,7 +560,6 @@ export class SceneManager {
 		leftWall.checkCollisions = true;
 		leftWall.material = wallMaterial;
 
-		// Right wall
 		const rightWall = MeshBuilder.CreateBox(
 			"rightWall",
 			{ width: 0.2, height: corridorHeight, depth: corridorLength },
@@ -462,7 +585,6 @@ export class SceneManager {
 		ceilingMaterial.diffuseColor = new Color3(0.25, 0.25, 0.25);
 		ceiling.material = ceilingMaterial;
 
-		// Add doors and details
 		this.addCorridorDetails(corridorLength, corridorWidth, corridorHeight);
 	}
 
@@ -472,13 +594,11 @@ export class SceneManager {
 	}
 
 	addCorridorDetails(length, width, height) {
-		// Door frames and props
 		const doorMaterial = new StandardMaterial("doorMaterial", this.scene);
 		doorMaterial.diffuseColor = new Color3(0.4, 0.3, 0.2);
 
-		// Add doors every 8 units
+		// Pintu sel di kiri dan kanan (hiasan)
 		for (let z = 8; z < length; z += 12) {
-			// Left door
 			const leftDoor = MeshBuilder.CreateBox(
 				`door_left_${z}`,
 				{ width: 1.5, height: 2.2, depth: 0.1 },
@@ -488,7 +608,6 @@ export class SceneManager {
 			leftDoor.material = doorMaterial;
 			leftDoor.checkCollisions = true;
 
-			// Right door
 			const rightDoor = MeshBuilder.CreateBox(
 				`door_right_${z}`,
 				{ width: 1.5, height: 2.2, depth: 0.1 },
@@ -499,7 +618,7 @@ export class SceneManager {
 			rightDoor.checkCollisions = true;
 		}
 
-		// Add some debris and props
+		// Puing
 		const debrisMaterial = new StandardMaterial("debrisMaterial", this.scene);
 		debrisMaterial.diffuseColor = new Color3(0.3, 0.2, 0.1);
 
@@ -523,204 +642,14 @@ export class SceneManager {
 		}
 	}
 
-	async createEntranceHall() {
-		// Floor
-		const floor = MeshBuilder.CreateGround(
-			"floor",
-			{ width: 20, height: 20 },
-			this.scene
-		);
-		floor.position.y = 0;
-		floor.checkCollisions = true;
-
-		const floorMaterial = new StandardMaterial("floorMaterial", this.scene);
-		floorMaterial.diffuseColor = new Color3(0.3, 0.3, 0.3);
-		floorMaterial.specularColor = new Color3(0.1, 0.1, 0.1);
-		floor.material = floorMaterial;
-
-		// Walls
-		this.createWalls(20, 20, 4);
-
-		// Add some basic props
-		this.createBasicProps();
-	}
-
-	async createLongCorridor() {
-		// Floor
-		const floor = MeshBuilder.CreateGround(
-			"floor",
-			{ width: 6, height: 30 },
-			this.scene
-		);
-		floor.position.y = 0;
-		floor.checkCollisions = true;
-
-		const floorMaterial = new StandardMaterial("floorMaterial", this.scene);
-		floorMaterial.diffuseColor = new Color3(0.2, 0.25, 0.2);
-		floor.material = floorMaterial;
-
-		// Corridor walls
-		this.createCorridorWalls(6, 30, 4);
-
-		// Add doors along corridor
-		this.createCorridorDoors();
-	}
-
-	async createResearchWing() {
-		// Larger research area
-		const floor = MeshBuilder.CreateGround(
-			"floor",
-			{ width: 25, height: 15 },
-			this.scene
-		);
-		floor.position.y = 0;
-		floor.checkCollisions = true;
-
-		const floorMaterial = new StandardMaterial("floorMaterial", this.scene);
-		floorMaterial.diffuseColor = new Color3(0.15, 0.15, 0.2);
-		floor.material = floorMaterial;
-
-		// Research wing walls
-		this.createWalls(25, 15, 4);
-
-		// Add research equipment
-		this.createResearchEquipment();
-	}
-
-	createWalls(width, depth, height) {
-		const wallMaterial = new StandardMaterial("wallMaterial", this.scene);
-		wallMaterial.diffuseColor = new Color3(0.4, 0.4, 0.35);
-		wallMaterial.specularColor = new Color3(0.1, 0.1, 0.1);
-
-		// Create walls
-		const walls = [
-			{
-				pos: new Vector3(0, height / 2, depth / 2),
-				size: new Vector3(width, height, 0.2),
-			},
-			{
-				pos: new Vector3(0, height / 2, -depth / 2),
-				size: new Vector3(width, height, 0.2),
-			},
-			{
-				pos: new Vector3(width / 2, height / 2, 0),
-				size: new Vector3(0.2, height, depth),
-			},
-			{
-				pos: new Vector3(-width / 2, height / 2, 0),
-				size: new Vector3(0.2, height, depth),
-			},
-		];
-
-		walls.forEach((wall, index) => {
-			const wallMesh = MeshBuilder.CreateBox(
-				`wall_${index}`,
-				{
-					width: wall.size.x,
-					height: wall.size.y,
-					depth: wall.size.z,
-				},
-				this.scene
-			);
-			wallMesh.position.copyFrom(wall.pos);
-			wallMesh.material = wallMaterial;
-			wallMesh.checkCollisions = true;
-		});
-	}
-
-	createCorridorWalls(width, length, height) {
-		const wallMaterial = new StandardMaterial("wallMaterial", this.scene);
-		wallMaterial.diffuseColor = new Color3(0.35, 0.4, 0.35);
-
-		// Side walls
-		const leftWall = MeshBuilder.CreateBox(
-			"leftWall",
-			{ width: 0.2, height: height, depth: length },
-			this.scene
-		);
-		leftWall.position = new Vector3(-width / 2, height / 2, 0);
-		leftWall.material = wallMaterial;
-		leftWall.checkCollisions = true;
-
-		const rightWall = MeshBuilder.CreateBox(
-			"rightWall",
-			{ width: 0.2, height: height, depth: length },
-			this.scene
-		);
-		rightWall.position = new Vector3(width / 2, height / 2, 0);
-		rightWall.material = wallMaterial;
-		rightWall.checkCollisions = true;
-	}
-
-	createBasicProps() {
-		// Simple furniture/debris
-		const propMaterial = new StandardMaterial("propMaterial", this.scene);
-		propMaterial.diffuseColor = new Color3(0.3, 0.2, 0.1);
-
-		// Broken chair
-		const chair = MeshBuilder.CreateBox(
-			"chair",
-			{ width: 1, height: 1.5, depth: 1 },
-			this.scene
-		);
-		chair.position = new Vector3(3, 0.75, 2);
-		chair.material = propMaterial;
-
-		// Debris
-		const debris = MeshBuilder.CreateBox(
-			"debris",
-			{ width: 0.5, height: 0.3, depth: 0.8 },
-			this.scene
-		);
-		debris.position = new Vector3(-2, 0.15, -1);
-		debris.material = propMaterial;
-	}
-
-	createCorridorDoors() {
-		const doorMaterial = new StandardMaterial("doorMaterial", this.scene);
-		doorMaterial.diffuseColor = new Color3(0.4, 0.3, 0.2);
-
-		// Create doors along corridor
-		for (let i = -10; i <= 10; i += 5) {
-			if (i !== 0) {
-				// Skip center
-				const door = MeshBuilder.CreateBox(
-					`door_${i}`,
-					{ width: 1.5, height: 2.5, depth: 0.1 },
-					this.scene
-				);
-				door.position = new Vector3(2.5, 1.25, i);
-				door.material = doorMaterial;
-			}
-		}
-	}
-
-	createResearchEquipment() {
-		const equipMaterial = new StandardMaterial("equipMaterial", this.scene);
-		equipMaterial.diffuseColor = new Color3(0.6, 0.6, 0.7);
-		equipMaterial.emissiveColor = new Color3(0.1, 0.1, 0.2);
-
-		// Research tables
-		const table1 = MeshBuilder.CreateBox(
-			"table1",
-			{ width: 3, height: 0.8, depth: 1.5 },
-			this.scene
-		);
-		table1.position = new Vector3(5, 0.4, 3);
-		table1.material = equipMaterial;
-
-		const table2 = MeshBuilder.CreateBox(
-			"table2",
-			{ width: 2, height: 0.8, depth: 1 },
-			this.scene
-		);
-		table2.position = new Vector3(-4, 0.4, -2);
-		table2.material = equipMaterial;
-	}
+	// ---------------------------------------------------------------
+	// PENCAHAYAAN
+	// ---------------------------------------------------------------
 
 	setupLighting(lightingType) {
-		// Remove existing lights except flashlight
-		this.scene.lights.forEach((light) => {
+		// Hapus lampu lama kecuali senter. Salin daftarnya dulu karena
+		// menghapus elemen saat looping bisa membuat sebagian terlewat.
+		[...this.scene.lights].forEach((light) => {
 			if (light.name !== "flashlight") {
 				light.dispose();
 			}
@@ -741,61 +670,198 @@ export class SceneManager {
 		}
 	}
 
+	// ---------------------------------------------------------------
+	// ITEM INTERAKTIF
+	// ---------------------------------------------------------------
+
+	// Mencari tinggi lantai di bawah titik (x, z). Mengembalikan null jika tidak ketemu.
+	findFloorY(x, z) {
+		const ray = new Ray(
+			new Vector3(x, FLOOR_PROBE_HEIGHT, z),
+			new Vector3(0, -1, 0),
+			20
+		);
+		const hit = this.scene.pickWithRay(
+			ray,
+			(m) =>
+				m.isPickable &&
+				m.isEnabled() &&
+				m.checkCollisions &&
+				!(m.metadata && (m.metadata.isDecor || m.metadata.isPickup))
+		);
+		return hit && hit.hit && hit.pickedPoint ? hit.pickedPoint.y : null;
+	}
+
+	makeMaterial(name, diffuse, emissive = null, specular = 0.05) {
+		const mat = new StandardMaterial(name, this.scene);
+		mat.diffuseColor = diffuse;
+		mat.specularColor = new Color3(specular, specular, specular);
+		if (emissive) mat.emissiveColor = emissive;
+		return mat;
+	}
+
+	getTableMaterial() {
+		if (!this.tableMaterial || this.tableMaterial.isDisposed) {
+			this.tableMaterial = this.makeMaterial(
+				"item_table_mat",
+				new Color3(0.22, 0.15, 0.1),
+				new Color3(0.03, 0.02, 0.015)
+			);
+		}
+		return this.tableMaterial;
+	}
+
 	createInteractables(interactables) {
 		interactables.forEach((item) => {
-			const mesh = this.systems.assetManager.createPlaceholderMesh(
-				`${item.type}_${Date.now()}`,
-				item.type === "door" ? 2 : 0.5
-			);
-			mesh.position.copyFrom(item.position);
+			const id = `${item.type}_${this.objectCounter++}`;
+			const data = { ...item.data };
+			const pos = item.position;
 
-			// Special handling for different types
-			if (item.type === "door") {
-				mesh.scaling = new Vector3(1.5, 2.5, 0.1);
-				mesh.material.diffuseColor = new Color3(0.4, 0.3, 0.2);
-			} else if (item.type === "note") {
-				mesh.scaling = new Vector3(0.3, 0.01, 0.4);
-				mesh.material.diffuseColor = new Color3(0.9, 0.9, 0.8);
-			} else if (item.type === "key") {
-				mesh.scaling = new Vector3(0.1, 0.3, 0.05);
-				mesh.material.diffuseColor = new Color3(0.8, 0.7, 0.2);
-				mesh.material.emissiveColor = new Color3(0.2, 0.15, 0.05);
+			if (item.type === "battery") {
+				const mesh = this.systems.interactionManager.spawnBattery(
+					new Vector3(pos.x, FLOOR_PROBE_HEIGHT, pos.z),
+					data.amount ?? 30,
+					true
+				);
+				this.sceneObjects.push(mesh);
+				console.log(`+ battery at x=${pos.x}, z=${pos.z}`);
+				return;
 			}
 
-			this.systems.interactionManager.registerInteractable(
-				mesh,
-				item.type,
-				item.data
-			);
+			const snap = item.snapToFloor === true;
+			let floorY = 0;
+			if (snap) {
+				const found = this.findFloorY(pos.x, pos.z);
+				if (found === null) console.warn(`! Lantai tidak ditemukan di x=${pos.x}, z=${pos.z} untuk ${item.type}. Dipakai y=0. Cek HORROR_LAYOUT.`);
+				floorY = found ?? 0;
+			}
+
+			let baseY = floorY;
+			if (snap && (item.type === "note" || item.type === "key")) {
+				const deskSize = this.systems.propLibrary.getFittedSize("desk") || new Vector3(0.9, TABLE_HEIGHT, 0.7);
+				const table = MeshBuilder.CreateBox(`${id}_table`, { width: deskSize.x, height: TABLE_HEIGHT, depth: deskSize.z }, this.scene);
+				table.position.set(pos.x, floorY + TABLE_HEIGHT / 2, pos.z);
+				table.material = this.getTableMaterial();
+				table.checkCollisions = true;
+				table.metadata = { isDecor: true };
+				this.sceneObjects.push(table);
+				baseY = floorY + TABLE_HEIGHT;
+				if (deskSize.x > 1.0) console.warn(`[SceneManager] Desk memiliki lebar arah X ${deskSize.x.toFixed(2)} m (> 1 m).`);
+				if (this.systems.propLibrary.attach("desk", table, { surfaceY: floorY })) table.visibility = 0;
+				console.log(`[SceneManager] desk ukuran akhir: w=${deskSize.x.toFixed(3)} h=${deskSize.y.toFixed(3)} d=${deskSize.z.toFixed(3)} m`);
+			}
+
+			let mesh;
+			switch (item.type) {
+				case "door": {
+					const size = data.size || { w: 3.6, h: 3.2, d: 0.2 };
+					mesh = MeshBuilder.CreateBox(id, { width: size.w, height: size.h, depth: size.d }, this.scene);
+					mesh.position.set(pos.x, snap ? floorY + size.h / 2 : pos.y, pos.z);
+					mesh.material = this.makeMaterial(`${id}_mat`, new Color3(0.26, 0.22, 0.2), new Color3(0.04, 0.03, 0.03));
+					mesh.checkCollisions = true;
+					break;
+				}
+				case "note": {
+					mesh = MeshBuilder.CreateBox(id, { width: 0.35, height: 0.02, depth: 0.25 }, this.scene);
+					mesh.position.set(pos.x, snap ? baseY + 0.015 : pos.y, pos.z);
+					mesh.rotation.y = (Math.random() - 0.5) * 0.6;
+					mesh.material = this.makeMaterial(`${id}_mat`, new Color3(0.9, 0.9, 0.8), new Color3(0.3, 0.3, 0.25));
+					mesh.metadata = { isPickup: true };
+					break;
+				}
+				case "key": {
+					mesh = MeshBuilder.CreateBox(id, { width: 0.08, height: 0.04, depth: 0.28 }, this.scene);
+					mesh.position.set(pos.x, snap ? baseY + 0.04 : pos.y, pos.z);
+					mesh.material = this.makeMaterial(`${id}_mat`, new Color3(0.8, 0.7, 0.2), new Color3(0.5, 0.4, 0.1), 0.3);
+					mesh.metadata = { isPickup: true };
+					break;
+				}
+				case "generator": {
+					mesh = MeshBuilder.CreateBox(id, { width: 1.2, height: 1.0, depth: 0.8 }, this.scene);
+					mesh.position.set(pos.x, snap ? floorY + 0.5 : pos.y + 0.5, pos.z);
+					mesh.material = this.makeMaterial(`${id}_mat`, new Color3(0.3, 0.32, 0.35), new Color3(0.05, 0.05, 0.08));
+					mesh.checkCollisions = true;
+					break;
+				}
+				case "switch": {
+					mesh = MeshBuilder.CreateBox(id, { width: 0.25, height: 0.35, depth: 0.1 }, this.scene);
+					mesh.position.set(pos.x, snap ? floorY + 1.2 : pos.y, pos.z);
+					mesh.material = this.makeMaterial(`${id}_mat`, new Color3(0.4, 0.4, 0.4), new Color3(1, 0, 0));
+					break;
+				}
+				default: {
+					mesh = MeshBuilder.CreateBox(id, { size: 0.5 }, this.scene);
+					mesh.position.set(pos.x, snap ? floorY + 0.25 : pos.y, pos.z);
+					mesh.material = this.makeMaterial(`${id}_mat`, new Color3(0.5, 0.5, 0.5));
+				}
+			}
+
+			this.sceneObjects.push(mesh);
+			this.systems.interactionManager.registerInteractable(mesh, item.type, data);
+			if (item.type === "door") {
+				const size = data.size || { w: 3.6, h: 3.2, d: 0.2 };
+				this.systems.propLibrary.attach("iron_gate", mesh, { surfaceY: floorY, width: size.w, height: size.h, depth: size.d });
+			} else if (item.type === "note") {
+				this.systems.propLibrary.attach("document", mesh, { surfaceY: baseY });
+			} else if (item.type === "key") {
+				this.systems.propLibrary.attach(data.id === "restricted_key" ? "key_restricted" : "key_ward", mesh, { surfaceY: baseY });
+			}
+
+			const label = data.title || data.name || data.id || "";
+			console.log(`+ ${item.type} "${label}" at x=${mesh.position.x.toFixed(1)}, y=${mesh.position.y.toFixed(1)}, z=${mesh.position.z.toFixed(1)}`);
 		});
 	}
+
+	// ---------------------------------------------------------------
+	// PEMICU (TRIGGER)
+	// ---------------------------------------------------------------
 
 	setupTriggers(triggers) {
 		triggers.forEach((trigger) => {
-			// Create invisible trigger zones
-			const triggerMesh = MeshBuilder.CreateSphere(
-				`trigger_${Date.now()}`,
-				{ diameter: trigger.radius * 2 },
-				this.scene
-			);
-			triggerMesh.position.copyFrom(trigger.position);
-			triggerMesh.isVisible = false;
+			let fired = false;
 
-			// Check for player entering trigger zone
-			this.scene.registerBeforeRender(() => {
-				const playerPos = this.scene.activeCamera.position;
-				const distance = Vector3.Distance(playerPos, trigger.position);
+			const observer = this.scene.onBeforeRenderObservable.add(() => {
+				if (fired) return;
+				const cam = this.scene.activeCamera;
+				if (!cam) return;
 
-				if (distance <= trigger.radius) {
+				// Jarak horizontal saja, supaya tidak terpengaruh tinggi mata pemain
+				const dx = cam.position.x - trigger.position.x;
+				const dz = cam.position.z - trigger.position.z;
+				const dy = Math.abs(cam.position.y - trigger.position.y);
+
+				if (Math.sqrt(dx * dx + dz * dz) <= trigger.radius && dy <= 4) {
+					// Sekali pakai: tandai dan lepas pengamatnya
+					fired = true;
+					this.scene.onBeforeRenderObservable.remove(observer);
 					this.systems.eventSystem.emit(trigger.event, trigger.data);
-					// Remove trigger after activation (single use)
-					triggerMesh.dispose();
 				}
 			});
+
+			this.triggerObservers.push(observer);
 		});
 	}
 
+	// ---------------------------------------------------------------
+	// PEMBERSIHAN
+	// ---------------------------------------------------------------
+
 	clearScene() {
+		// Lepas semua pemicu
+		this.triggerObservers.forEach((obs) =>
+			this.scene.onBeforeRenderObservable.remove(obs)
+		);
+		this.triggerObservers = [];
+
+		// Hapus semua objek item dan meja
+		this.sceneObjects.forEach((obj) => {
+			if (obj && !obj.isDisposed()) {
+				this.systems.propLibrary?.removeHighlight(obj);
+				obj.dispose();
+			}
+		});
+		this.sceneObjects = [];
+
 		// Dispose of level builder resources
 		if (this.levelBuilder) {
 			this.levelBuilder.dispose();
@@ -809,12 +875,8 @@ export class SceneManager {
 		this.systems.audioManager.stopAmbient("ambient_asylum");
 	}
 
-	getCurrentScene() {
-		return this.currentScene;
-	}
-
 	addCollisionTestMarkers() {
-		// Add invisible collision test boxes to verify collision detection
+		// Kotak uji tabrakan tak terlihat (untuk memeriksa deteksi dinding)
 		const testPositions = [
 			new Vector3(-2, 1, 5), // Left wall test
 			new Vector3(2, 1, 5), // Right wall test
@@ -829,17 +891,10 @@ export class SceneManager {
 				this.scene
 			);
 			testBox.position.copyFrom(pos);
-			testBox.isVisible = false; // Hidden in production
+			testBox.isVisible = false;
 			testBox.checkCollisions = true;
-
-			// Make visible in debug mode (uncomment for testing)
-			// testBox.isVisible = true;
-			// const testMaterial = new StandardMaterial(`test_mat_${index}`, this.scene);
-			// testMaterial.diffuseColor = new Color3(1, 0, 0);
-			// testBox.material = testMaterial;
+			testBox.metadata = { isDecor: true };
 		});
-
-		console.log(`✓ Added ${testPositions.length} collision test markers`);
 	}
 
 	getCurrentScene() {
