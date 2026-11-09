@@ -1,0 +1,21 @@
+{
+  "name": "shadows-of-abandoned",
+  "version": "1.0.0",
+  "description": "3D Horror Game - Shadows of the Abandoned",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "packageManager": "pnpm@8.0.0",
+  "dependencies": {
+    "@babylonjs/core": "^6.33.1",
+    "@babylonjs/loaders": "^6.33.1",
+    "@babylonjs/materials": "^6.33.1",
+    "@babylonjs/post-processes": "^6.33.1"
+  },
+  "devDependencies": {
+    "vite": "^4.4.5"
+  }
+}

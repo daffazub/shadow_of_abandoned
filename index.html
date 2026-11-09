@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shadows of the Abandoned</title>
+    <link rel="stylesheet" href="src/styles/opening.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Courier New', monospace;
+            background: #000;
+            color: #e0e0e0;
+            overflow: hidden;
+            cursor: none;
+        }
+        
+        #gameCanvas {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+            background: #000;
+        }
+        
+        .ui-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 100;
+        }
+        
+        .hud {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid rgba(100, 100, 120, 0.3);
+            min-width: 200px;
+        }
+        
+        .hud h3 {
+            color: #ff6b6b;
+            margin-bottom: 10px;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .hud-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+            font-size: 12px;
+        }
+        
+        .hud-value {
+            color: #4ecdc4;
+            font-weight: bold;
+        }
+        
+        .crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 20px;
+            height: 20px;
+            pointer-events: none;
+        }
+        
+        .crosshair::before,
+        .crosshair::after {
+            content: '';
+            position: absolute;
+            background: rgba(255, 255, 255, 0.8);
+        }
+        
+        .crosshair::before {
+            top: 50%;
+            left: 0;
+            width: 100%;
+            height: 1px;
+            transform: translateY(-50%);
+        }
+        
+        .crosshair::after {
+            left: 50%;
+            top: 0;
+            width: 1px;
+            height: 100%;
+            transform: translateX(-50%);
+        }
+        
+        .interaction-prompt {
+            position: absolute;
+            bottom: 100px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(20, 20, 30, 0.9);
+            padding: 12px 20px;
+            border-radius: 6px;
+            border: 1px solid rgba(100, 100, 120, 0.5);
+            font-size: 14px;
+            color: #e0e0e0;
+            display: none;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 0.8; }
+            50% { opacity: 1; }
+        }
+        
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid rgba(100, 100, 120, 0.3);
+            font-size: 11px;
+            line-height: 1.4;
+        }
+        
+        .controls h4 {
+            color: #ff6b6b;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .control-item {
+            margin: 3px 0;
+            display: flex;
+            justify-content: space-between;
+            min-width: 150px;
+        }
+        
+        .key {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: bold;
+            color: #4ecdc4;
+        }
+        
+        .document-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            pointer-events: all;
+        }
+        
+        .document-content {
+            background: rgba(20, 20, 30, 0.95);
+            border: 2px solid rgba(100, 100, 120, 0.5);
+            border-radius: 10px;
+            padding: 30px;
+            max-width: 600px;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8);
+        }
+        
+        .document-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            border-bottom: 1px solid rgba(100, 100, 120, 0.3);
+            padding-bottom: 15px;
+        }
+        
+        .document-header h3 {
+            color: #ff6b6b;
+            font-size: 18px;
+            margin: 0;
+        }
+        
+        .document-close {
+            font-size: 24px;
+            cursor: pointer;
+            color: #999;
+            transition: color 0.3s;
+        }
+        
+        .document-close:hover {
+            color: #ff6b6b;
+        }
+        
+        .document-body {
+            line-height: 1.6;
+            font-size: 14px;
+            color: #e0e0e0;
+        }
+        
+        .document-footer {
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid rgba(100, 100, 120, 0.3);
+            text-align: center;
+            font-size: 11px;
+            color: #999;
+        }
+        
+        .loading-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+        }
+        
+        .loading-title {
+            font-size: 32px;
+            color: #ff6b6b;
+            margin-bottom: 20px;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+        }
+        
+        .loading-subtitle {
+            font-size: 14px;
+            color: #999;
+            margin-bottom: 40px;
+        }
+        
+        .click-to-start {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1500;
+            cursor: pointer;
+        }
+        
+        .start-message {
+            font-size: 24px;
+            color: #e0e0e0;
+            margin-bottom: 20px;
+            animation: pulse 2s infinite;
+        }
+        
+        .start-subtitle {
+            font-size: 14px;
+            color: #999;
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading Screen -->
+    <div id="loadingScreen" class="loading-screen">
+        <div class="loading-title">Shadows of the Abandoned</div>
+        <div class="loading-subtitle">Loading asylum assets...</div>
+    </div>
+    
+    <!-- Click to Start -->
+    <div id="clickToStart" class="click-to-start" style="display: none;">
+        <div class="start-message">Click to Enter the Asylum</div>
+        <div class="start-subtitle">Audio and controls will be enabled</div>
+    </div>
+    
+    <!-- Game Canvas -->
+    <canvas id="gameCanvas"></canvas>
+    
+    <!-- UI Overlay -->
+    <div class="ui-overlay">
+        <!-- HUD -->
+        <div class="hud">
+            <h3>Status</h3>
+            <div class="hud-item">
+                <span>Flashlight Battery:</span>
+                <span id="battery" class="hud-value">100%</span>
+            </div>
+            <div class="hud-item">
+                <span>Documents Found:</span>
+                <span id="documents" class="hud-value">0</span>
+            </div>
+            <div class="hud-item">
+                <span>Keys Collected:</span>
+                <span id="keys" class="hud-value">0</span>
+            </div>
+            <div class="hud-item">
+                <span>Current Area:</span>
+                <span id="area" class="hud-value">Entrance</span>
+            </div>
+        </div>
+        
+        <!-- Crosshair -->
+        <div class="crosshair"></div>
+        
+        <!-- Interaction Prompt -->
+        <div id="interaction" class="interaction-prompt"></div>
+        
+        <!-- Controls -->
+        <div class="controls">
+            <h4>Controls</h4>
+            <div class="control-item">
+                <span>Move:</span>
+                <span><span class="key">WASD</span></span>
+            </div>
+            <div class="control-item">
+                <span>Look:</span>
+                <span><span class="key">Mouse</span></span>
+            </div>
+            <div class="control-item">
+                <span>Flashlight:</span>
+                <span><span class="key">F</span></span>
+            </div>
+            <div class="control-item">
+                <span>Interact:</span>
+                <span><span class="key">E</span></span>
+            </div>
+            <div class="control-item">
+                <span>Lock Cursor:</span>
+                <span><span class="key">Click</span></span>
+            </div>
+        </div>
+    </div>
+    
+    <script type="module" src="src/main.js"></script>
+    
+    <script>
+        // Initialize loading screen
+        setTimeout(() => {
+            document.getElementById('loadingScreen').style.display = 'none';
+            document.getElementById('clickToStart').style.display = 'flex';
+        }, 2000);
+        
+        // Click to start handler
+        document.getElementById('clickToStart').addEventListener('click', () => {
+            document.getElementById('clickToStart').style.display = 'none';
+        });
+    </script>
+</body>
+</html>
