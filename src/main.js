@@ -245,7 +245,7 @@ class Game {
 			new Vector3(0, 4, -5),
 			this.scene
 		);
-		this.camera.setTarget(new Vector3(0, 4, 0));
+		this.camera.setTarget(new Vector3(10, 3.4, -5.2));
 
 		// Camera settings for horror atmosphere
 		this.camera.fov = 0.8;

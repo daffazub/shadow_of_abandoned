@@ -8,9 +8,9 @@ import {
 } from "@babylonjs/core";
 import { LevelBuilder } from "./LevelBuilder.js";
 
-// Ketinggian titik awal sinar yang mencari lantai (di bawah langit-langit).
-// Naikkan jika langit-langit koridor Anda lebih tinggi dari 3 unit.
-const FLOOR_PROBE_HEIGHT = 2.5;
+const FLOOR_Y = 2.52;
+const CEILING_Y = 6.66;
+const FLOOR_PROBE_HEIGHT = 5.0;
 const TABLE_HEIGHT = 0.8;
 
 /**
@@ -22,19 +22,20 @@ const TABLE_HEIGHT = 0.8;
  * lalu lihat konsol (F12). Salin nilai x dan z ke sini.
  */
 const HORROR_LAYOUT = {
-	wardKey: { x: 1.2, z: 2.0 }, // Kunci #1 (Scene 1)
-	wardGate: { x: 0, z: 6.0 }, // Gerbang #1, butuh kunci #1
-	noticeDoc: { x: -1.2, z: 8.5 }, // Dokumen #1 (Scene 2)
-	battery1: { x: 1.0, z: 9.5 }, // Baterai (Scene 3)
-	encounter1: { x: 0, z: 11.0 }, // Pertemuan pertama dengan entitas
-	diaryDoc: { x: 1.2, z: 12.0 }, // Dokumen #2 (Scene 3)
-	battery2: { x: -1.0, z: 13.5 }, // Baterai (Scene 3)
-	experimentDoc: { x: -1.2, z: 16.0 }, // Dokumen #3 (Scene 4)
-	encounter2: { x: 0, z: 17.5 }, // Pertemuan kedua dengan entitas
-	restrictedKey: { x: 1.2, z: 18.0 }, // Kunci #2 (Scene 4)
-	restrictedGate: { x: 0, z: 20.5 }, // Gerbang #2, butuh kunci #2
-	gateWidth: 3.6, // lebar gerbang; samakan dengan lebar koridor
-	gateHeight: 3.2, // tinggi gerbang; samakan dengan tinggi koridor
+	playerStart: { x: -3.0, z: -5.2 },
+	wardKey: { x: -1.0, z: -6.20, deskAxis: "x" },
+	wardGate: { x: 1.2, z: -5.225, axis: "x" },
+	noticeDoc: { x: 4.41, z: -8.20, deskAxis: "x" },
+	battery1: { x: 3.3, z: -1.8 },
+	encounter1: { x: 4.41, z: -0.2, radius: 3 },
+	diaryDoc: { x: 5.8, z: 4.8, deskAxis: "z" },
+	battery2: { x: 3.2, z: 6.6 },
+	experimentDoc: { x: 0.2, z: 3.15, deskAxis: "x" },
+	encounter2: { x: 0.2, z: 2.1, radius: 2.5 },
+	restrictedKey: { x: 8.4, z: 3.15, deskAxis: "x" },
+	restrictedGate: { x: 7.6, z: -5.225, axis: "x" },
+	gateWidth: 3.1,
+	gateHeight: 4.15,
 };
 
 export class SceneManager {
@@ -62,7 +63,7 @@ export class SceneManager {
 		// ---------------------------------------------------------------
 		this.sceneData.set("horror_scene", {
 			name: "Abandoned Ward",
-			playerStart: new Vector3(0, 4, -5),
+			playerStart: new Vector3(L.playerStart.x, 4, L.playerStart.z),
 			environment: "horror_scene_glb",
 			lighting: "atmospheric",
 			interactables: [
@@ -70,14 +71,16 @@ export class SceneManager {
 				{
 					type: "key",
 					snapToFloor: true,
-					position: new Vector3(L.wardKey.x, 0, L.wardKey.z),
+					position: new Vector3(L.wardKey.x, FLOOR_Y, L.wardKey.z),
+					deskAxis: L.wardKey.deskAxis,
 					data: { id: "ward_key", name: "Ward Gate Key", spin: true },
 				},
 				{
 					type: "door",
 					snapToFloor: true,
-					position: new Vector3(L.wardGate.x, 0, L.wardGate.z),
+					position: new Vector3(L.wardGate.x, FLOOR_Y, L.wardGate.z),
 					data: {
+						axis: L.wardGate.axis,
 						id: "ward_gate",
 						locked: true,
 						keyId: "ward_key",
@@ -90,7 +93,8 @@ export class SceneManager {
 				{
 					type: "note",
 					snapToFloor: true,
-					position: new Vector3(L.noticeDoc.x, 0, L.noticeDoc.z),
+					position: new Vector3(L.noticeDoc.x, FLOOR_Y, L.noticeDoc.z),
+					deskAxis: L.noticeDoc.deskAxis,
 					data: {
 						id: "doc_notice",
 						title: "Notice of Closure",
@@ -108,7 +112,8 @@ export class SceneManager {
 				{
 					type: "note",
 					snapToFloor: true,
-					position: new Vector3(L.diaryDoc.x, 0, L.diaryDoc.z),
+					position: new Vector3(L.diaryDoc.x, FLOOR_Y, L.diaryDoc.z),
+					deskAxis: L.diaryDoc.deskAxis,
 					data: {
 						id: "doc_diary",
 						title: "Patient Diary - Bed 14",
@@ -126,7 +131,8 @@ export class SceneManager {
 				{
 					type: "note",
 					snapToFloor: true,
-					position: new Vector3(L.experimentDoc.x, 0, L.experimentDoc.z),
+					position: new Vector3(L.experimentDoc.x, FLOOR_Y, L.experimentDoc.z),
+					deskAxis: L.experimentDoc.deskAxis,
 					data: {
 						id: "doc_experiment",
 						title: "Dr. Hartwell - Experiment 9",
@@ -137,14 +143,16 @@ export class SceneManager {
 				{
 					type: "key",
 					snapToFloor: true,
-					position: new Vector3(L.restrictedKey.x, 0, L.restrictedKey.z),
+					position: new Vector3(L.restrictedKey.x, FLOOR_Y, L.restrictedKey.z),
+					deskAxis: L.restrictedKey.deskAxis,
 					data: { id: "restricted_key", name: "Restricted Wing Key", spin: true },
 				},
 				{
 					type: "door",
 					snapToFloor: true,
-					position: new Vector3(L.restrictedGate.x, 0, L.restrictedGate.z),
+					position: new Vector3(L.restrictedGate.x, FLOOR_Y, L.restrictedGate.z),
 					data: {
+						axis: L.restrictedGate.axis,
 						id: "restricted_gate",
 						locked: true,
 						keyId: "restricted_key",
@@ -155,14 +163,14 @@ export class SceneManager {
 			],
 			triggers: [
 				{
-					position: new Vector3(L.encounter1.x, 0, L.encounter1.z),
-					radius: 3,
+					position: new Vector3(L.encounter1.x, FLOOR_Y, L.encounter1.z),
+					radius: L.encounter1.radius,
 					event: "entity_encounter",
 					data: { intensity: 1 },
 				},
 				{
-					position: new Vector3(L.encounter2.x, 0, L.encounter2.z),
-					radius: 3,
+					position: new Vector3(L.encounter2.x, FLOOR_Y, L.encounter2.z),
+					radius: L.encounter2.radius,
 					event: "entity_encounter",
 					data: { intensity: 2 },
 				},
@@ -461,11 +469,11 @@ export class SceneManager {
 			const result = await SceneLoader.ImportMeshAsync(
 				"",
 				"/assets/models/",
-				"horror_corridor_1.glb",
+				"corridor_baru.glb",
 				this.scene
 			);
 			console.log(
-				"Horror corridor GLB loaded with",
+				"corridor_baru.glb loaded with",
 				result.meshes.length,
 				"meshes"
 			);
@@ -501,22 +509,17 @@ export class SceneManager {
 			this.scene.getEngine().hideLoadingUI();
 			return result;
 		} catch (error) {
-			console.error("Failed to load horror_corridor_1.glb:", error);
+			console.warn("Failed to load corridor_baru.glb; memakai koridor cadangan:", error);
 			// Fallback to procedural corridor
 			this.createFallbackCorridor();
 			this.scene.getEngine().hideLoadingUI();
-			throw error;
+			return null;
 		}
 	}
 
 	async createFullAsylum() {
-		// Try to load GLB corridor first, fallback to procedural
-		try {
-			await this.loadHorrorSceneGLB();
-		} catch (error) {
-			console.warn("GLB loading failed, using procedural corridor");
-			this.createAsylumCorridor();
-		}
+		// loadHorrorSceneGLB sudah membuat fallback dan mengembalikan null saat gagal.
+		await this.loadHorrorSceneGLB();
 		this.scene.getEngine().hideLoadingUI();
 	}
 
@@ -738,7 +741,8 @@ export class SceneManager {
 
 			let baseY = floorY;
 			if (snap && (item.type === "note" || item.type === "key")) {
-				const deskSize = this.systems.propLibrary.getFittedSize("desk") || new Vector3(0.9, TABLE_HEIGHT, 0.7);
+				const deskAxis = item.deskAxis || "z";
+				const deskSize = this.systems.propLibrary.getFittedSize("desk", { axis: deskAxis }) || new Vector3(0.9, TABLE_HEIGHT, 0.7);
 				const table = MeshBuilder.CreateBox(`${id}_table`, { width: deskSize.x, height: TABLE_HEIGHT, depth: deskSize.z }, this.scene);
 				table.position.set(pos.x, floorY + TABLE_HEIGHT / 2, pos.z);
 				table.material = this.getTableMaterial();
@@ -746,16 +750,20 @@ export class SceneManager {
 				table.metadata = { isDecor: true };
 				this.sceneObjects.push(table);
 				baseY = floorY + TABLE_HEIGHT;
-				if (deskSize.x > 1.0) console.warn(`[SceneManager] Desk memiliki lebar arah X ${deskSize.x.toFixed(2)} m (> 1 m).`);
-				if (this.systems.propLibrary.attach("desk", table, { surfaceY: floorY })) table.visibility = 0;
-				console.log(`[SceneManager] desk ukuran akhir: w=${deskSize.x.toFixed(3)} h=${deskSize.y.toFixed(3)} d=${deskSize.z.toFixed(3)} m`);
+				const longSide = Math.max(deskSize.x, deskSize.z);
+				const shortSide = Math.min(deskSize.x, deskSize.z);
+				if (longSide > 1.7 || shortSide > 0.9) console.warn(`[SceneManager] Desk di luar batas koridor: panjang=${longSide.toFixed(2)} m, pendek=${shortSide.toFixed(2)} m.`);
+				if (this.systems.propLibrary.attach("desk", table, { surfaceY: floorY, axis: deskAxis })) table.visibility = 0;
+				console.log(`[SceneManager] desk (${deskAxis}) ukuran akhir: w=${deskSize.x.toFixed(3)} h=${deskSize.y.toFixed(3)} d=${deskSize.z.toFixed(3)} m`);
 			}
 
 			let mesh;
 			switch (item.type) {
 				case "door": {
-					const size = data.size || { w: 3.6, h: 3.2, d: 0.2 };
-					mesh = MeshBuilder.CreateBox(id, { width: size.w, height: size.h, depth: size.d }, this.scene);
+					const size = data.size || { w: 3.1, h: 4.15, d: 0.2 };
+					const anchorWidth = data.axis === "x" ? size.d : size.w;
+					const anchorDepth = data.axis === "x" ? size.w : size.d;
+					mesh = MeshBuilder.CreateBox(id, { width: anchorWidth, height: size.h, depth: anchorDepth }, this.scene);
 					mesh.position.set(pos.x, snap ? floorY + size.h / 2 : pos.y, pos.z);
 					mesh.material = this.makeMaterial(`${id}_mat`, new Color3(0.26, 0.22, 0.2), new Color3(0.04, 0.03, 0.03));
 					mesh.checkCollisions = true;
@@ -799,8 +807,14 @@ export class SceneManager {
 			this.sceneObjects.push(mesh);
 			this.systems.interactionManager.registerInteractable(mesh, item.type, data);
 			if (item.type === "door") {
-				const size = data.size || { w: 3.6, h: 3.2, d: 0.2 };
-				this.systems.propLibrary.attach("iron_gate", mesh, { surfaceY: floorY, width: size.w, height: size.h, depth: size.d });
+				const size = data.size || { w: 3.1, h: 4.15, d: 0.2 };
+				this.systems.propLibrary.attach("iron_gate", mesh, {
+					surfaceY: floorY,
+					width: size.w,
+					height: size.h,
+					depth: size.d,
+					rotationY: data.axis === "x" ? Math.PI / 2 : 0,
+				});
 			} else if (item.type === "note") {
 				this.systems.propLibrary.attach("document", mesh, { surfaceY: baseY });
 			} else if (item.type === "key") {

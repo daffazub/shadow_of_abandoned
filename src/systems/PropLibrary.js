@@ -2,6 +2,8 @@ import {
 	Color3,
 	HighlightLayer,
 	Matrix,
+	MeshBuilder,
+	StandardMaterial,
 	TransformNode,
 	Vector3,
 } from "@babylonjs/core";
@@ -82,6 +84,7 @@ export class PropLibrary {
 		this.scene = scene;
 		this.containers = new Map();
 		this.sizes = new Map();
+		this.bounds = new Map();
 		this.failed = new Set();
 		this.highlightLayer = new HighlightLayer("prop_highlights", scene, {
 			blurHorizontalSize: 1.5,
@@ -110,7 +113,9 @@ export class PropLibrary {
 				0
 			);
 			const sourceBounds = this.getContainerBounds(container);
+			this.bounds.set(name, sourceBounds);
 			console.log(`[PropLibrary] ${name}: ${triangles} triangles`);
+			console.log(`[PropLibrary] ${name} ukuran asli: ${this.formatSize(boundsSize(sourceBounds))}`);
 			if (name === "iron_gate" && triangles > 15000) {
 				console.warn(`[PropLibrary] iron_gate memiliki ${triangles} segitiga (> 15.000).`);
 			}
@@ -135,7 +140,15 @@ export class PropLibrary {
 		const size = this.sizes.get(name);
 		if (!size) return null;
 		if (name === "iron_gate" && opts.width && opts.height) {
-			return new Vector3(opts.width, opts.height, opts.depth ?? size.z);
+			const rotated = Math.abs((opts.rotationY || 0) % Math.PI) > 0.1;
+			return rotated
+				? new Vector3(opts.depth ?? size.z, opts.height, opts.width)
+				: new Vector3(opts.width, opts.height, opts.depth ?? size.z);
+		}
+		if (name === "desk" && opts.axis && this.bounds.has(name)) {
+			const config = PROP_CONFIG[name];
+			const oriented = { ...config, rotation: new Vector3(0, opts.axis === "x" ? 0 : Math.PI / 2, 0) };
+			return this.calculateFit(name, this.bounds.get(name), oriented);
 		}
 		return size.clone();
 	}
@@ -147,7 +160,7 @@ export class PropLibrary {
 
 		const pivot = new TransformNode(`${anchor.id}_${name}_pivot`, this.scene);
 		pivot.parent = anchor;
-		pivot.rotation.copyFrom(this.getVisualRotation(name));
+		pivot.rotation.copyFrom(this.getVisualRotation(name, opts));
 
 		const instance = container.instantiateModelsToScene(
 			(nodeName) => `${anchor.id}_${nodeName}`,
@@ -164,20 +177,40 @@ export class PropLibrary {
 			width: opts.width,
 			height: opts.height,
 			depth: opts.depth,
+			rotationY: opts.rotationY,
+			axis: opts.axis,
 		});
+		let gateFillGap = 0;
 		if (fit && rawSize.x > 0 && rawSize.y > 0 && rawSize.z > 0) {
 			if (name === "iron_gate") {
-				const scales = [fit.x / rawSize.x, fit.y / rawSize.y, fit.z / rawSize.z];
+				let scales = [fit.x / rawSize.x, fit.y / rawSize.y, fit.z / rawSize.z];
 				const distortion = Math.max(...scales) / Math.min(...scales);
 				if (distortion > 1.25) {
-					console.warn(`[PropLibrary] iron_gate mengalami distorsi skala ${Math.round((distortion - 1) * 100)}% (> 25%).`);
+					const widthScale = fit.z / rawSize.z;
+					scales = [widthScale, widthScale, widthScale];
+					console.warn("[PropLibrary] iron_gate distorsi > 25%; memakai skala seragam dan panel pengisi.");
 				}
-				console.log(`[PropLibrary] iron_gate ukuran akhir: ${this.formatSize(fit)}`);
-				pivot.scaling.set(
-					scales[0],
-					scales[1],
-					scales[2]
-				);
+				console.log(`[PropLibrary] iron_gate skala akhir: x=${scales[0].toFixed(3)} y=${scales[1].toFixed(3)} z=${scales[2].toFixed(3)}`);
+				pivot.scaling.set(scales[0], scales[1], scales[2]);
+				pivot.computeWorldMatrix(true);
+				const scaledGateBounds = pivot.getHierarchyBoundingVectors(true);
+				gateFillGap = Math.max(0, fit.y - (scaledGateBounds.max.y - scaledGateBounds.min.y));
+				if (gateFillGap > 0.01) {
+					const gateRotated = Math.abs((opts.rotationY || 0) % Math.PI) > 0.1;
+					const panel = MeshBuilder.CreateBox(`${anchor.id}_gate_fill`, {
+						width: (gateRotated ? rawSize.z : rawSize.x) / scales[0],
+						height: gateFillGap / scales[1],
+						depth: (gateRotated ? rawSize.x : rawSize.z) / scales[2],
+					}, this.scene);
+					panel.parent = pivot;
+					panel.position.y = scaledGateBounds.max.y / scales[1] + gateFillGap / (2 * scales[1]);
+					const panelMaterial = new StandardMaterial(`${anchor.id}_gate_fill_mat`, this.scene);
+					panelMaterial.diffuseColor = new Color3(0.06, 0.055, 0.05);
+					panelMaterial.specularColor = new Color3(0.02, 0.02, 0.02);
+					panel.material = panelMaterial;
+					panel.isPickable = false;
+					panel.checkCollisions = false;
+				}
 			} else {
 				const scale = Math.min(
 					fit.x / rawSize.x,
@@ -259,9 +292,11 @@ export class PropLibrary {
 		return bounds;
 	}
 
-	getVisualRotation(name) {
+	getVisualRotation(name, opts = {}) {
 		const config = PROP_CONFIG[name];
 		const rotation = (config.rotation || Vector3.Zero()).clone();
+		if (name === "desk" && opts.axis) rotation.y = opts.axis === "x" ? 0 : Math.PI / 2;
+		if (name === "iron_gate" && opts.rotationY) rotation.y += opts.rotationY;
 		if (config.flatten) {
 			const sourceBounds = this.getContainerBounds(this.containers.get(name));
 			const sourceSize = boundsSize(sourceBounds);

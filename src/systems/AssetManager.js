@@ -132,7 +132,7 @@ export class AssetManager {
     async loadCorridorModel() {
         // Load the horror corridor GLB model with proper collision setup
         try {
-            const result = await this.loadModel('horror_corridor1', 'horror_corridor_1.glb');
+            const result = await this.loadModel('horror_corridor1', 'corridor_baru.glb');
             if (result && result.meshes) {
                 // Setup collision for corridor meshes
                 result.meshes.forEach(mesh => {
