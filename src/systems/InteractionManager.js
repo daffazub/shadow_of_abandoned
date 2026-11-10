@@ -33,16 +33,72 @@ export class InteractionManager {
 
     // Tekan P untuk mencetak posisi pemain di konsol (F12).
     // Berguna untuk menentukan koordinat item. Boleh dihapus kalau tidak perlu.
-    setupDebugKeys() {
-        window.addEventListener('keydown', (e) => {
-            if (e.key.toLowerCase() === 'p' && this.scene.activeCamera) {
-                const p = this.scene.activeCamera.position;
-                console.log(
-                    `Posisi: x=${p.x.toFixed(1)}, y=${p.y.toFixed(1)}, z=${p.z.toFixed(1)}`
-                );
-            }
-        });
-    }
+        setupDebugKeys() {
+            window.addEventListener('keydown', (e) => {
+                if (e.key.toLowerCase() === 'p' && this.scene.activeCamera) {
+                    const p = this.scene.activeCamera.position;
+                    console.log(
+                        `Posisi: x=${p.x.toFixed(1)}, y=${p.y.toFixed(1)}, z=${p.z.toFixed(1)}`
+                    );
+                }
+                if (e.key.toLowerCase() === 'g') this.printGateDiagnostics();
+            });
+        }
+
+        printGateDiagnostics() {
+            const camera = this.scene.activeCamera;
+            const vectorState = (value) => ({
+                x: value?.x,
+                y: value?.y,
+                z: value?.z,
+                hasNaN: !value || [value.x, value.y, value.z].some(Number.isNaN),
+                hasZero: !value || [value.x, value.y, value.z].some((component) => component === 0),
+            });
+            console.group('[Debug G] Gerbang');
+            console.log('Kamera:', camera ? vectorState(camera.position) : null);
+            this.interactables.forEach((interactable) => {
+                if (interactable.type !== 'door') return;
+                const anchor = interactable.mesh;
+                const pivot = anchor.metadata?.propPivot;
+                const children = pivot ? pivot.getChildMeshes(false) : [];
+                const bounds = pivot ? pivot.getHierarchyBoundingVectors(true) : null;
+                console.group(`${anchor.id} (${interactable.data.id || 'door'})`);
+                console.log('Anchor:', {
+                    worldPosition: vectorState(anchor.getAbsolutePosition()),
+                    visibility: anchor.visibility,
+                    isVisible: anchor.isVisible,
+                    enabled: anchor.isEnabled(),
+                    checkCollisions: anchor.checkCollisions,
+                });
+                console.log('Pivot:', pivot ? {
+                    position: vectorState(pivot.position),
+                    scaling: vectorState(pivot.scaling),
+                    rotation: vectorState(pivot.rotation),
+                } : null);
+                console.log('Visual world bounds:', bounds ? {
+                    min: vectorState(bounds.min),
+                    max: vectorState(bounds.max),
+                    size: vectorState(bounds.max.subtract(bounds.min)),
+                } : null);
+                console.log('Visual child count:', children.length);
+                children.forEach((mesh) => {
+                    const material = mesh.material;
+                    console.log('Visual child:', {
+                        name: mesh.name,
+                        isEnabled: mesh.isEnabled(),
+                        isVisible: mesh.isVisible,
+                        visibility: mesh.visibility,
+                        material: material?.getClassName?.() || material?.name || null,
+                        alphaMode: material?.alphaMode,
+                        hasAlbedoTexture: Boolean(material?.albedoTexture),
+                        position: vectorState(mesh.position),
+                        scaling: vectorState(mesh.scaling),
+                    });
+                });
+                console.groupEnd();
+            });
+            console.groupEnd();
+        }
 
     registerInteractable(mesh, type, data = {}) {
         const interactable = {

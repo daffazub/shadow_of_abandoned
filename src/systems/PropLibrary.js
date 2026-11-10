@@ -107,6 +107,11 @@ export class PropLibrary {
 			this.scene
 			);
 			this.applyTint(container, config.tint);
+			if (name === "iron_gate") {
+				container.materials.forEach((material) => {
+					if (material.emissiveColor) material.emissiveColor = new Color3(0.06, 0.05, 0.05);
+				});
+			}
 			this.containers.set(name, container);
 			const triangles = container.meshes.reduce(
 				(total, mesh) => total + Math.floor(mesh.getTotalIndices() / 3),
@@ -203,7 +208,8 @@ export class PropLibrary {
 						depth: (gateRotated ? rawSize.x : rawSize.z) / scales[2],
 					}, this.scene);
 					panel.parent = pivot;
-					panel.position.y = scaledGateBounds.max.y / scales[1] + gateFillGap / (2 * scales[1]);
+					const anchorWorldY = anchor.getAbsolutePosition().y;
+					panel.position.y = (scaledGateBounds.max.y - anchorWorldY) / scales[1] + gateFillGap / (2 * scales[1]);
 					const panelMaterial = new StandardMaterial(`${anchor.id}_gate_fill_mat`, this.scene);
 					panelMaterial.diffuseColor = new Color3(0.06, 0.055, 0.05);
 					panelMaterial.specularColor = new Color3(0.02, 0.02, 0.02);
@@ -224,24 +230,17 @@ export class PropLibrary {
 		pivot.computeWorldMatrix(true);
 		const fittedBounds = pivot.getHierarchyBoundingVectors(true);
 		const anchorPosition = anchor.getAbsolutePosition();
-		// Posisi memakai koordinat lokal anchor; semua anchor item tidak diputar.
-		pivot.position.x = -((fittedBounds.min.x + fittedBounds.max.x) / 2);
-		pivot.position.z = -((fittedBounds.min.z + fittedBounds.max.z) / 2);
-		pivot.position.y = (opts.surfaceY ?? anchorPosition.y) - anchorPosition.y - fittedBounds.min.y;
+		// Bounding vectors berupa koordinat dunia; ubah koreksinya menjadi lokal anchor.
+		pivot.position.x = anchorPosition.x - (fittedBounds.min.x + fittedBounds.max.x) / 2;
+		pivot.position.z = anchorPosition.z - (fittedBounds.min.z + fittedBounds.max.z) / 2;
+		pivot.position.y = (opts.surfaceY ?? anchorPosition.y) - fittedBounds.min.y;
 		pivot.computeWorldMatrix(true);
 
-		const visualMeshes = [];
-		instance.rootNodes.forEach((root) => {
-			root.getChildMeshes(false).forEach((mesh) => {
-				mesh.isPickable = false;
-				mesh.checkCollisions = false;
-				visualMeshes.push(mesh);
-			});
-			if (root.getClassName && root.getClassName() === "Mesh") {
-				root.isPickable = false;
-				root.checkCollisions = false;
-				visualMeshes.push(root);
-			}
+		const visualMeshes = pivot.getChildMeshes(false);
+		visualMeshes.forEach((mesh) => {
+			mesh.isPickable = false;
+			mesh.checkCollisions = false;
+			mesh.visibility = 1;
 		});
 		anchor.metadata = anchor.metadata || {};
 		anchor.metadata.propVisualMeshes = visualMeshes;

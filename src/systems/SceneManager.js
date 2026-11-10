@@ -503,10 +503,17 @@ export class SceneManager {
 				rootMesh.scaling = new Vector3(1, 1, 1);
 			}
 
+			// Root GLB sudah diposisikan ulang; paksa matrix dan bounds terbaru.
+			result.meshes.forEach((mesh) => {
+				mesh.computeWorldMatrix(true);
+				if (mesh.geometry) mesh.refreshBoundingInfo();
+			});
+
 			// Add collision test markers (invisible in production)
 			this.addCollisionTestMarkers();
 
 			this.scene.getEngine().hideLoadingUI();
+			this.floorMatrixRetryDone = false;
 			return result;
 		} catch (error) {
 			console.warn("Failed to load corridor_baru.glb; memakai koridor cadangan:", error);
@@ -684,14 +691,20 @@ export class SceneManager {
 			new Vector3(0, -1, 0),
 			20
 		);
-		const hit = this.scene.pickWithRay(
-			ray,
-			(m) =>
-				m.isPickable &&
-				m.isEnabled() &&
-				m.checkCollisions &&
-				!(m.metadata && (m.metadata.isDecor || m.metadata.isPickup))
-		);
+		const predicate = (m) =>
+			m.isPickable &&
+			m.isEnabled() &&
+			m.checkCollisions &&
+			!(m.metadata && (m.metadata.isDecor || m.metadata.isPickup));
+		let hit = this.scene.pickWithRay(ray, predicate);
+		if ((!hit || !hit.hit || !hit.pickedPoint) && !this.floorMatrixRetryDone) {
+			this.floorMatrixRetryDone = true;
+			this.scene.meshes.forEach((mesh) => {
+				mesh.computeWorldMatrix(true);
+				if (mesh.geometry) mesh.refreshBoundingInfo();
+			});
+			hit = this.scene.pickWithRay(ray, predicate);
+		}
 		return hit && hit.hit && hit.pickedPoint ? hit.pickedPoint.y : null;
 	}
 
