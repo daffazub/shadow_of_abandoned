@@ -9,6 +9,7 @@ import { SceneManager } from "./systems/SceneManager.js";
 import { EnvironmentManager } from "./systems/EnvironmentManager.js";
 import { OpeningSequence } from "./systems/OpeningSequence.js";
 import { PropLibrary } from "./systems/PropLibrary.js";
+import { MonsterManager } from "./systems/MonsterManager.js";
 
 // Nama area yang tampil di HUD. Kunci = nama scene yang dimuat SceneManager.
 const SCENE_NAMES = {
@@ -64,6 +65,9 @@ class Game {
 			this.scene,
 			this.systems
 		);
+		this.systems.monsterManager = new MonsterManager(this.scene, this.systems);
+		// Muat model monster di latar belakang supaya tidak ada jeda saat pintu kedua dibuka
+		this.systems.monsterManager.preload();
 
 		// Setup camera
 		this.setupCamera();
@@ -115,6 +119,10 @@ class Game {
 				data.intensity,
 				data.position
 			);
+		});
+		// Pintu kedua (restricted_gate) dibuka -> monster muncul dan mengejar pemain
+		this.systems.eventSystem.on("door_opened", (data) => {
+			this.systems.monsterManager.onDoorOpened(data);
 		});
 
 		// Document discovery events

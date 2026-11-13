@@ -905,6 +905,9 @@ export class SceneManager {
 		// Clear interactables
 		this.systems.interactionManager.dispose();
 
+		// Sembunyikan monster jika sedang aktif
+		this.systems.monsterManager?.despawn();
+
 		// Stop ambient sounds
 		this.systems.audioManager.stopAmbient("ambient_asylum");
 	}

@@ -21,6 +21,8 @@ export class PlayerController {
         this.flashlightIntensity = 3.0; // naikkan jika masih terlalu gelap
         this.flickerChance = 0.02;
 
+        this.frozen = false; // true saat tertangkap monster
+
         this.keys = {};
         this.mouseMovement = { x: 0, y: 0 };
 
@@ -101,6 +103,12 @@ export class PlayerController {
     }
 
     handleMovement(deltaTime) {
+
+        if (this.frozen) {
+            this.isMoving = false;
+            return;
+        }
+
         const yaw = this.camera.rotation.y;
 
         // Arah horizontal berdasarkan putaran kamera (tidak terpengaruh melihat atas/bawah)
