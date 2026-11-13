@@ -106,6 +106,7 @@ export class PropLibrary {
 			config.file,
 			this.scene
 			);
+			container.materials.forEach((material) => { material.maxSimultaneousLights = 10; });
 			this.applyTint(container, config.tint);
 			if (name === "iron_gate") {
 				container.materials.forEach((material) => {
@@ -158,100 +159,76 @@ export class PropLibrary {
 		return size.clone();
 	}
 
+
 	attach(name, anchor, opts = {}) {
 		const container = this.containers.get(name);
 		const config = PROP_CONFIG[name];
 		if (!container || !config || !anchor || anchor.isDisposed()) return false;
-
-		const pivot = new TransformNode(`${anchor.id}_${name}_pivot`, this.scene);
-		pivot.parent = anchor;
-		pivot.rotation.copyFrom(this.getVisualRotation(name, opts));
-
-		const instance = container.instantiateModelsToScene(
-			(nodeName) => `${anchor.id}_${nodeName}`,
-			false
-		);
-		instance.rootNodes.forEach((root) => {
-			root.parent = pivot;
-		});
-
-		pivot.computeWorldMatrix(true);
-		const rawBounds = pivot.getHierarchyBoundingVectors(true);
-		const rawSize = rawBounds.max.subtract(rawBounds.min);
-		const fit = this.getFittedSize(name, {
-			width: opts.width,
-			height: opts.height,
-			depth: opts.depth,
-			rotationY: opts.rotationY,
-			axis: opts.axis,
-		});
-		let gateFillGap = 0;
-		if (fit && rawSize.x > 0 && rawSize.y > 0 && rawSize.z > 0) {
+		let pivot;
+		const ownedMaterials = [];
+		try {
+			// Fit di origin sebelum parenting: posisi/rotasi anchor tidak mencemari ukuran.
+			pivot = new TransformNode(`${anchor.id}_${name}_pivot`, this.scene);
+			const instance = container.instantiateModelsToScene((nodeName) => `${anchor.id}_${nodeName}`, false, { doNotInstantiate: true });
+			instance.rootNodes.forEach((root) => { root.parent = pivot; });
+			const source = pivot.getHierarchyBoundingVectors(true, (mesh) => mesh.getTotalVertices() > 0);
+			const sourceSize = boundsSize(source);
+			if (![sourceSize.x, sourceSize.y, sourceSize.z].every((n) => Number.isFinite(n) && n > 0)) throw new Error("Model has invalid bounds");
 			if (name === "iron_gate") {
-				let scales = [fit.x / rawSize.x, fit.y / rawSize.y, fit.z / rawSize.z];
-				const distortion = Math.max(...scales) / Math.min(...scales);
-				if (distortion > 1.25) {
-					const widthScale = fit.z / rawSize.z;
-					scales = [widthScale, widthScale, widthScale];
-					console.warn("[PropLibrary] iron_gate distorsi > 25%; memakai skala seragam dan panel pengisi.");
-				}
-				console.log(`[PropLibrary] iron_gate skala akhir: x=${scales[0].toFixed(3)} y=${scales[1].toFixed(3)} z=${scales[2].toFixed(3)}`);
-				pivot.scaling.set(scales[0], scales[1], scales[2]);
-				pivot.computeWorldMatrix(true);
-				const scaledGateBounds = pivot.getHierarchyBoundingVectors(true);
-				gateFillGap = Math.max(0, fit.y - (scaledGateBounds.max.y - scaledGateBounds.min.y));
-				if (gateFillGap > 0.01) {
-					const gateRotated = Math.abs((opts.rotationY || 0) % Math.PI) > 0.1;
+				const sx = (opts.width ?? sourceSize.x) / sourceSize.x;
+				const requestedY = (opts.height ?? sourceSize.y) / sourceSize.y;
+				const distortion = Math.max(sx, requestedY) / Math.min(sx, requestedY);
+				const sy = distortion > 1.25 ? sx : requestedY;
+				pivot.scaling.set(sx, sy, sx);
+				const gap = (opts.height ?? sourceSize.y) - sourceSize.y * sy;
+				if (gap > 0.01) {
 					const panel = MeshBuilder.CreateBox(`${anchor.id}_gate_fill`, {
-						width: (gateRotated ? rawSize.z : rawSize.x) / scales[0],
-						height: gateFillGap / scales[1],
-						depth: (gateRotated ? rawSize.x : rawSize.z) / scales[2],
+						width: sourceSize.x, height: gap / sy, depth: (opts.depth ?? 0.2) / sx,
 					}, this.scene);
 					panel.parent = pivot;
-					const anchorWorldY = anchor.getAbsolutePosition().y;
-					panel.position.y = (scaledGateBounds.max.y - anchorWorldY) / scales[1] + gateFillGap / (2 * scales[1]);
-					const panelMaterial = new StandardMaterial(`${anchor.id}_gate_fill_mat`, this.scene);
-					panelMaterial.diffuseColor = new Color3(0.06, 0.055, 0.05);
-					panelMaterial.specularColor = new Color3(0.02, 0.02, 0.02);
-					panel.material = panelMaterial;
-					panel.isPickable = false;
-					panel.checkCollisions = false;
+					panel.position.set((source.min.x + source.max.x) / 2, source.max.y + gap / (2 * sy), (source.min.z + source.max.z) / 2);
+					const mat = new StandardMaterial(`${anchor.id}_gate_fill_mat`, this.scene);
+					mat.diffuseColor = new Color3(0.06, 0.055, 0.05);
+					mat.emissiveColor = new Color3(0.03, 0.025, 0.025);
+					panel.material = mat;
+					ownedMaterials.push(mat);
 				}
+				console.log(`[PropLibrary] iron_gate scale x=${sx.toFixed(3)} y=${sy.toFixed(3)} z=${sx.toFixed(3)}, top panel=${Math.max(0, gap).toFixed(3)} m`);
+				pivot.rotation.copyFrom(this.getVisualRotation(name, opts));
 			} else {
-				const scale = Math.min(
-					fit.x / rawSize.x,
-					fit.y / rawSize.y,
-					fit.z / rawSize.z
-				);
-				pivot.scaling.set(scale, scale, scale);
+				pivot.rotation.copyFrom(this.getVisualRotation(name, opts));
+				const size = boundsSize(pivot.getHierarchyBoundingVectors(true, (mesh) => mesh.getTotalVertices() > 0));
+				const fit = this.getFittedSize(name, opts);
+				const scale = Math.min(fit.x / size.x, fit.y / size.y, fit.z / size.z);
+				if (!Number.isFinite(scale) || scale <= 0) throw new Error("Invalid fitted scale");
+				pivot.scaling.setAll(scale);
 			}
+			const fitted = pivot.getHierarchyBoundingVectors(true, (mesh) => mesh.getTotalVertices() > 0);
+			anchor.computeWorldMatrix(true);
+			const anchorY = anchor.getAbsolutePosition().y;
+			pivot.parent = anchor;
+			pivot.position.set(-(fitted.min.x + fitted.max.x) / 2, (opts.surfaceY ?? anchorY) - anchorY - fitted.min.y, -(fitted.min.z + fitted.max.z) / 2);
+			const meshes = pivot.getChildMeshes(false);
+			meshes.forEach((mesh) => {
+				mesh.isPickable = false;
+				mesh.checkCollisions = false;
+				mesh.visibility = 1;
+			});
+			anchor.metadata = { ...anchor.metadata, propPivot: pivot, propVisualMeshes: meshes, propOwnedMaterials: ownedMaterials };
+			if (config.highlight) {
+				anchor.metadata.propHighlightMeshes = meshes.filter((mesh) => mesh.getTotalVertices() > 0);
+				anchor.metadata.propHighlightMeshes.forEach((mesh) => this.highlightLayer.addMesh(mesh, config.highlight));
+			}
+			anchor.visibility = 0;
+			return true;
+		} catch (error) {
+			this.removeHighlight(anchor);
+			pivot?.dispose();
+			ownedMaterials.forEach((material) => material.dispose());
+			anchor.visibility = 1;
+			console.warn(`[PropLibrary] ${name} gagal dipasang; placeholder tetap terlihat.`, error);
+			return false;
 		}
-
-		pivot.computeWorldMatrix(true);
-		const fittedBounds = pivot.getHierarchyBoundingVectors(true);
-		const anchorPosition = anchor.getAbsolutePosition();
-		// Bounding vectors berupa koordinat dunia; ubah koreksinya menjadi lokal anchor.
-		pivot.position.x = anchorPosition.x - (fittedBounds.min.x + fittedBounds.max.x) / 2;
-		pivot.position.z = anchorPosition.z - (fittedBounds.min.z + fittedBounds.max.z) / 2;
-		pivot.position.y = (opts.surfaceY ?? anchorPosition.y) - fittedBounds.min.y;
-		pivot.computeWorldMatrix(true);
-
-		const visualMeshes = pivot.getChildMeshes(false);
-		visualMeshes.forEach((mesh) => {
-			mesh.isPickable = false;
-			mesh.checkCollisions = false;
-			mesh.visibility = 1;
-		});
-		anchor.metadata = anchor.metadata || {};
-		anchor.metadata.propVisualMeshes = visualMeshes;
-		anchor.metadata.propPivot = pivot;
-
-		if (config.highlight) {
-			anchor.metadata.propHighlightMeshes = visualMeshes;
-			visualMeshes.forEach((mesh) => this.highlightLayer.addMesh(mesh, config.highlight));
-		}
-		anchor.visibility = 0;
-		return true;
 	}
 
 	removeHighlight(anchor) {
@@ -275,7 +252,9 @@ export class PropLibrary {
 			max: new Vector3(-Infinity, -Infinity, -Infinity),
 		};
 		container.meshes.forEach((mesh) => {
+			if (mesh.getTotalVertices() === 0) return;
 			mesh.computeWorldMatrix(true);
+			mesh.refreshBoundingInfo();
 			const box = mesh.getBoundingInfo().boundingBox;
 			const matrix = mesh.getWorldMatrix();
 			for (const x of [box.minimum.x, box.maximum.x]) {

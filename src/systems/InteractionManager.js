@@ -189,7 +189,11 @@ export class InteractionManager {
 
     removePickup(interactable) {
         this.systems.propLibrary?.removeHighlight(interactable.mesh);
+        const material = interactable.mesh.material;
+        const propMaterials = interactable.mesh.metadata?.propOwnedMaterials || [];
         interactable.mesh.dispose();
+        propMaterials.forEach((ownedMaterial) => ownedMaterial.dispose());
+        material?.dispose();
         this.interactables.delete(interactable.mesh.id);
     }
 
@@ -240,6 +244,11 @@ export class InteractionManager {
     }
 
     checkForInteractables() {
+        if (this.systems.playerController.controlsLocked || this.systems.playerController.frozen) {
+            this.currentInteractable = null;
+            this.updateInteractionUI(null);
+            return;
+        }
         const camera = this.scene.activeCamera;
         if (!camera) return;
 
@@ -359,7 +368,7 @@ export class InteractionManager {
     // ---------------------------------------------------------------
 
     tryInteract() {
-        if (!this.currentInteractable) return false;
+        if (this.systems.playerController?.controlsLocked || this.systems.playerController?.frozen || !this.currentInteractable || !this.currentInteractable.isActive) return false;
 
         const interactable = this.currentInteractable;
 
@@ -419,6 +428,10 @@ export class InteractionManager {
         let t = 0;
 
         const observer = this.scene.onBeforeRenderObservable.add(() => {
+            if (mesh.isDisposed()) {
+                this.scene.onBeforeRenderObservable.remove(observer);
+                return;
+            }
             t += this.scene.getEngine().getDeltaTime() / 1000 / 1.2;
             const k = Math.min(1, t);
             const eased = 1 - Math.pow(1 - k, 3);

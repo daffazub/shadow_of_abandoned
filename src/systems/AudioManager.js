@@ -28,6 +28,10 @@ const SOUND_DEFS = {
 	entity_growl: { files: ['entity/growl.mp3'], volume: 1.0, spatial: true },
 	heartbeat: { files: ['stingers/heartbeat.mp3'], volume: 1.0 },
 	static: { files: ['stingers/static.mp3'], volume: 0.8 },
+	intro_wake: { files: ['intro/intro_wake_clair_de_lune.mp3'], volume: 0.35 },
+	intro_waterphone: { files: ['intro/intro_waterphone_scrape.mp3'], volume: 0.45 },
+	intro_whoosh: { files: ['intro/intro_whoosh_release.mp3'], volume: 0.4 },
+	electrical_spark: { files: ['electrical_spark.mp3'], volume: 0.35 },
 };
 
 // Suara latar yang diputar berulang (loop)

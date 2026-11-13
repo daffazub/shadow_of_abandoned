@@ -18,6 +18,8 @@ const SCENE_NAMES = {
 	main_corridor: "Main Corridor",
 	research_wing: "Research Wing",
 	basement: "Basement",
+	restricted_area: "Restricted Wing",
+	experiment_lab: "Experiment Laboratory",
 };
 
 class Game {
@@ -30,6 +32,8 @@ class Game {
 		this.scene = null;
 		this.camera = null;
 		this.activeOverlay = null;
+		this.gameEnded = false;
+		this.finalSequenceStarted = false;
 
 		this.systems = {};
 
@@ -120,7 +124,7 @@ class Game {
 				data.position
 			);
 		});
-		// Pintu kedua (restricted_gate) dibuka -> monster muncul dan mengejar pemain
+		// Arm/preload at the gate; the destination scene starts the actual chase.
 		this.systems.eventSystem.on("door_opened", (data) => {
 			this.systems.monsterManager.onDoorOpened(data);
 		});
@@ -147,20 +151,34 @@ class Game {
 
 		// Key collection events
 		this.systems.eventSystem.on("key_collected", (data) => {
-			console.log(`Key collected: ${data.keyName}`);
+			console.log(`Key collected: ${data.name || data.id}`);
 		});
 
 		// Generator and power events
-		this.systems.eventSystem.on("generator_activated", (data) => {
+		const restorePower = (data) => {
 			if (data.powers === "facility_lighting") {
 				this.systems.environmentManager.restorePower();
 			}
-		});
+		};
+		this.systems.eventSystem.on("generator_started", restorePower);
+		this.systems.eventSystem.on("generator_activated", restorePower);
 
 		// Final sequence events
-		this.systems.eventSystem.on("switch_activated", (data) => {
+		const startFinalSequence = (data) => {
 			if (data.controls === "final_sequence") {
 				this.startFinalSequence();
+			}
+		};
+		this.systems.eventSystem.on("switch_toggled", startFinalSequence);
+		this.systems.eventSystem.on("switch_activated", startFinalSequence);
+		this.systems.eventSystem.on("ending_requested", ({ ending }) => {
+			if (this.gameEnded || this.finalSequenceStarted) return;
+			if (ending === "B") this.showGameComplete();
+			else if (ending === "A" || ending === "C") this.showEnding(ending);
+		});
+		this.systems.eventSystem.on("door_opened", (data) => {
+			if (data.id === "restricted_gate") {
+				this.systems.interactionManager.showMessage("Walk through the gate into the east corridor to enter the Restricted Wing.", 6500);
 			}
 		});
 	}
@@ -174,28 +192,38 @@ class Game {
 	}
 
 	startFinalSequence() {
-		console.log("Starting final sequence...");
-
-		// Dramatic lighting and audio
-		this.systems.environmentManager.startChaseSequence();
-		this.systems.audioManager.playAmbient("entity_pursuit");
-
-		// Show final message after delay
-		setTimeout(() => {
-			this.showGameComplete();
-		}, 10000);
+		if (this.gameEnded || this.finalSequenceStarted) return;
+		this.finalSequenceStarted = true;
+		this.systems.eventSystem.stopStoryTimers();
+		this.closeDocument();
+		this.systems.playerController.controlsLocked = true;
+		this.systems.playerController.resetInput();
+		this.systems.environmentManager.stopEntityPursuit();
+		this.systems.environmentManager.stopLightTimers();
+		this.systems.audioManager.playSound("generator_start", { volume: 0.6 });
+		this.systems.audioManager.playSound("entity_growl", { volume: 0.7 });
+		this.systems.interactionManager.showMessage("Containment failure. The machine is shutting down…", 5000);
+		setTimeout(() => this.showGameComplete(), 5000);
 	}
 
 	closeDocument() {
 		if (this.activeOverlay) {
 			this.activeOverlay.remove();
 			this.activeOverlay = null;
+			if (!this.gameEnded && !this.finalSequenceStarted && !this.systems.sceneManager.isTransitioning) {
+				this.systems.playerController.resetInput();
+				this.systems.playerController.controlsLocked = false;
+			}
 		}
 	}
 
 	showDocument(title, content) {
-		// Pastikan hanya satu dokumen terbuka pada satu waktu
+		if (this.gameEnded || this.finalSequenceStarted) return;
+		// Membaca dokumen menjeda kontrol dan ancaman agar pemain tidak tertangkap saat membaca.
 		this.closeDocument();
+		this.systems.playerController.controlsLocked = true;
+		this.systems.playerController.resetInput();
+		document.exitPointerLock?.();
 
 		const overlay = document.createElement("div");
 		overlay.className = "document-overlay";
@@ -225,13 +253,62 @@ class Game {
 		this.activeOverlay = overlay;
 	}
 
-	showGameComplete() {
+	showEnding(ending) {
+		if (this.gameEnded) return;
+		this.gameEnded = true;
+		this.closeDocument();
+		this.systems.playerController.controlsLocked = true;
+		this.systems.playerController.resetInput();
+		this.camera.applyGravity = false;
+		this.systems.environmentManager.stopEntityPursuit();
+		["ambient_asylum", "ambient_basement", "generator_running", "entity_pursuit"].forEach((name) => this.systems.audioManager.stopAmbient(name));
+		this.systems.environmentManager.stopLightTimers();
+		this.systems.interactionManager.updateInteractionUI(null);
+		document.exitPointerLock?.();
+		const endings = {
+			A: { title: "Dawn Beyond Blackwood", copy: "You reach the outside as dawn breaks. Behind you, a shadow watches from an asylum window." },
+			C: { title: "Part of the Asylum", copy: "The last light fades. Your footsteps join the whispers in Blackwood's empty halls." },
+		};
+		const details = endings[ending];
+		if (!details) return;
 		const overlay = document.createElement("div");
-		overlay.className = "document-overlay";
+		overlay.className = "document-overlay ending-overlay";
+		overlay.dataset.ending = ending;
+		const panel = document.createElement("div");
+		panel.className = "document-content";
+		const title = document.createElement("h2");
+		title.textContent = `Ending ${ending} — ${details.title}`;
+		const copy = document.createElement("p");
+		copy.textContent = details.copy;
+		const replay = document.createElement("button");
+		replay.textContent = "Play Again";
+		replay.addEventListener("click", () => location.reload());
+		panel.append(title, copy, replay);
+		overlay.appendChild(panel);
+		document.body.appendChild(overlay);
+		this.systems.eventSystem.emit("game_ended", { ending });
+	}
+
+	showGameComplete() {
+		if (this.gameEnded) return;
+		this.gameEnded = true;
+		this.closeDocument();
+		this.systems.playerController.controlsLocked = true;
+		this.systems.playerController.resetInput();
+		this.camera.applyGravity = false;
+		this.systems.environmentManager.stopEntityPursuit();
+		["ambient_asylum", "ambient_basement", "generator_running", "entity_pursuit"].forEach((name) => this.systems.audioManager.stopAmbient(name));
+		this.systems.environmentManager.stopLightTimers();
+		this.systems.interactionManager.updateInteractionUI(null);
+		document.exitPointerLock?.();
+		this.systems.eventSystem.emit("game_ended", { ending: "B" });
+		const overlay = document.createElement("div");
+		overlay.className = "document-overlay ending-overlay";
+		overlay.dataset.ending = "B";
 		overlay.innerHTML = `
             <div class="document-content">
                 <div class="document-header">
-                    <h3>Entity Contained</h3>
+                    <h3>Ending B — Entity Contained</h3>
                 </div>
                 <div class="document-body">
                     <p>The generator has been destroyed. The entity's connection to this reality has been severed.</p>
@@ -272,6 +349,7 @@ class Game {
 	}
 
 	update() {
+		if (this.gameEnded) return;
 		const deltaTime = this.engine.getDeltaTime() / 1000;
 
 		// Update all systems
@@ -329,9 +407,10 @@ window.addEventListener("DOMContentLoaded", () => {
 		if (clickToStart) clickToStart.style.display = "flex";
 	}, 2000);
 
-	// Start game when user clicks
-	document.getElementById("clickToStart")?.addEventListener("click", () => {
-		document.getElementById("clickToStart").style.display = "none";
+	let gameStarted = false;
+	window.addEventListener("game-play-requested", () => {
+		if (gameStarted) return;
+		gameStarted = true;
 		new Game();
 	});
 });

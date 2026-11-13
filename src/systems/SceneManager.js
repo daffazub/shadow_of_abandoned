@@ -1,5 +1,6 @@
 import {
 	Vector3,
+	Mesh,
 	MeshBuilder,
 	StandardMaterial,
 	Color3,
@@ -7,6 +8,7 @@ import {
 	Ray,
 } from "@babylonjs/core";
 import { LevelBuilder } from "./LevelBuilder.js";
+import { buildStoryArea, STORY_AREA_LAYOUT, STORY_CORRIDOR_TRANSFORM } from "./StoryAreas.js";
 
 const FLOOR_Y = 2.52;
 const CEILING_Y = 6.66;
@@ -52,7 +54,11 @@ export class SceneManager {
 		this.objectCounter = 0;
 		this.tableMaterial = null;
 
+		this.environmentMeshes = [];
+		this.safeZones = [];
+		this.isTransitioning = false;
 		this.initializeScenes();
+		this.initializeStoryScenes();
 	}
 
 	initializeScenes() {
@@ -409,6 +415,89 @@ export class SceneManager {
 	// MEMUAT SCENE
 	// ---------------------------------------------------------------
 
+	initializeStoryScenes() {
+		const restricted = STORY_AREA_LAYOUT.restricted_area;
+		const lab = STORY_AREA_LAYOUT.experiment_lab;
+		const doorPosition = new Vector3(0, STORY_AREA_LAYOUT.height / 2, STORY_AREA_LAYOUT.doorZ);
+		const doorSize = { w: STORY_AREA_LAYOUT.width, h: STORY_AREA_LAYOUT.height, d: 0.2 };
+		this.sceneData.set("restricted_area", {
+			name: "Restricted Wing", environment: "restricted_area", lighting: "story",
+			playerStart: new Vector3(0, 1.8, 2), ambient: "ambient_basement",
+			interactables: [
+				...restricted.batteries.map((position) => ({ type: "battery", position: position.clone(), data: { amount: 35 } })),
+				{ type: "door", position: doorPosition.clone(), data: {
+					id: "laboratory_door", locked: false, size: { ...doorSize }, nextScene: "experiment_lab",
+				} },
+			], triggers: [],
+		});
+		// Teks dokumen terakhir memakai salinan data existing, bukan narasi baru.
+		const finalNote = this.sceneData.get("basement").interactables.find((item) => item.type === "note");
+		this.sceneData.set("experiment_lab", {
+			name: "Experiment Laboratory", environment: "experiment_lab", lighting: "story",
+			playerStart: new Vector3(0, 1.8, 2), ambient: "generator_running",
+			interactables: [
+				{ type: "note", snapToFloor: true, deskAxis: "z", position: lab.note.clone(), data: { ...finalNote.data, id: "doc_final" } },
+				...lab.batteries.map((position) => ({ type: "battery", position: position.clone(), data: { amount: 40 } })),
+				{ type: "generator", position: lab.generator.clone(), data: { id: "experiment_generator", powers: "facility_lighting" } },
+				{ type: "switch", position: lab.switch.clone(), data: { id: "destruction_switch", controls: "final_sequence" } },
+				{ type: "door", position: doorPosition.clone(), data: { id: "asylum_exit", locked: false, ending: "A", size: { ...doorSize } } },
+			], triggers: [],
+		});
+	}
+
+	async transitionTo(sceneName) {
+		if (this.isTransitioning || this.systems.playerController.controlsLocked || !this.sceneData.has(sceneName)) return;
+		this.isTransitioning = true;
+		const player = this.systems.playerController;
+		player.controlsLocked = true;
+		player.resetInput();
+		const cover = document.createElement("div");
+		cover.className = "scene-transition";
+		cover.textContent = "Entering " + this.sceneData.get(sceneName).name + "…";
+		document.body.appendChild(cover);
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 450));
+			await this.loadScene(sceneName);
+			await new Promise((resolve) => setTimeout(resolve, 250));
+		} catch (error) {
+			console.error("Scene transition failed:", error);
+			this.systems.interactionManager.showMessage("Area could not be loaded. Please reload the game.");
+		} finally {
+			cover.remove();
+			this.isTransitioning = false;
+			player.resetInput();
+			player.controlsLocked = false;
+		}
+	}
+
+	setupProgression() {
+		let endingRequested = false;
+		const observer = this.scene.onBeforeRenderObservable.add(() => {
+			if (endingRequested || this.isTransitioning || this.systems.playerController.controlsLocked) return;
+			const p = this.scene.activeCamera.position;
+			const doors = [...this.systems.interactionManager.interactables.values()];
+			if (this.currentScene === "horror_scene") {
+				const gate = doors.find((item) => item.data.id === "restricted_gate");
+				if (gate?.data.isOpen && p.x > HORROR_LAYOUT.restrictedGate.x + 0.5 && Math.abs(p.z - HORROR_LAYOUT.restrictedGate.z) < 1.6) {
+					void this.transitionTo("restricted_area");
+				}
+			} else {
+				for (const door of doors) {
+					if (!door.data.isOpen) continue;
+					const target = door.mesh.position;
+					if (p.z <= target.z + 0.35 || Math.abs(p.x - target.x) > (door.data.size?.w || 3) / 2) continue;
+					if (door.data.nextScene) void this.transitionTo(door.data.nextScene);
+					if (door.data.ending) {
+						endingRequested = true;
+						this.systems.eventSystem.emit("ending_requested", { ending: door.data.ending });
+						break;
+					}
+				}
+			}
+		});
+		this.triggerObservers.push(observer);
+	}
+
 	async loadScene(sceneName) {
 		const sceneData = this.sceneData.get(sceneName);
 		if (!sceneData) {
@@ -423,14 +512,21 @@ export class SceneManager {
 
 		console.log(`Loading scene: ${sceneData.name}`);
 
-		// Set player position
+		// Story corridors are shifted to floor y=0; probe below their 4.15 m roof.
+		this.floorProbeHeight = sceneData.lighting === "story" ? 1.8 : FLOOR_PROBE_HEIGHT;
 		this.scene.activeCamera.position.copyFrom(sceneData.playerStart);
 
-		// Load environment
-		await this.loadEnvironment(sceneData.environment);
+		// Track explicit ownership: background monster/prop loads are not scene geometry.
+		const environment = await this.loadEnvironment(sceneData.environment);
+		this.environmentMeshes = environment?.meshes || [];
+		if (sceneData.lighting === "story") this.scene.activeCamera.rotation.set(0, 0, 0);
 
 		// Setup lighting
-		this.setupLighting(sceneData.lighting);
+		if (sceneData.lighting === "story") {
+			this.systems.environmentManager.setupStoryLighting(sceneName, this.safeZones);
+		} else {
+			this.setupLighting(sceneData.lighting);
+		}
 
 		// GLB dipanaskan sekali sebelum pembuatan anchor yang sinkron.
 		await this.systems.propLibrary.preload();
@@ -442,9 +538,17 @@ export class SceneManager {
 		this.setupTriggers(sceneData.triggers);
 
 		// Start ambient audio
-		this.systems.audioManager.playAmbient("ambient_asylum");
+		this.systems.audioManager.playAmbient(sceneData.ambient || "ambient_asylum");
 
 		this.currentScene = sceneName;
+		this.setupProgression();
+		if (sceneName === "restricted_area") {
+			this.systems.environmentManager.startEntityPursuit();
+			this.systems.interactionManager.showMessage("Stay in the light. Reach the laboratory ahead.", 6500);
+		} else if (sceneName === "experiment_lab") {
+			this.systems.environmentManager.startEntityPursuit();
+			this.systems.interactionManager.showMessage("Escape through EXIT, or use the red switch to destroy the machine.", 8500);
+		}
 
 		// Emit scene loaded event
 		this.systems.eventSystem.emit("scene_loaded", {
@@ -456,15 +560,33 @@ export class SceneManager {
 	}
 
 	async loadEnvironment(environmentType) {
-		if (environmentType === "horror_scene_glb") {
-			await this.loadHorrorSceneGLB();
+		if (environmentType === "restricted_area" || environmentType === "experiment_lab") {
+			const corridor = await this.loadHorrorSceneGLB({ fallback: false });
+			let corridorRoot;
+			if (corridor) {
+				// A mesh wrapper is tracked by environmentMeshes, including its whole hierarchy.
+				const root = new Mesh(`${environmentType}_corridor_root`, this.scene);
+				corridorRoot = root;
+				root.isPickable = false;
+				root.checkCollisions = false;
+				root.position.copyFrom(STORY_CORRIDOR_TRANSFORM.position);
+				root.rotation.y = STORY_CORRIDOR_TRANSFORM.rotationY;
+				[...corridor.meshes, ...(corridor.transformNodes || [])]
+					.filter((node) => !node.parent)
+					.forEach((node) => { node.parent = root; });
+				corridor.meshes.forEach((mesh) => mesh.computeWorldMatrix(true));
+			}
+			const area = buildStoryArea(this.scene, environmentType, { useCorridor: Boolean(corridor) });
+			this.safeZones = area.safeZones;
+			return { meshes: [...(corridor?.meshes || []), ...(corridorRoot ? [corridorRoot] : []), ...area.meshes] };
+		} else if (environmentType === "horror_scene_glb") {
+			return this.loadHorrorSceneGLB();
 		} else {
-			// "full_asylum" dan lainnya: coba GLB, jika gagal pakai koridor prosedural
-			await this.createFullAsylum();
+			return this.createFullAsylum();
 		}
 	}
 
-	async loadHorrorSceneGLB() {
+	async loadHorrorSceneGLB({ fallback = true } = {}) {
 		try {
 			const result = await SceneLoader.ImportMeshAsync(
 				"",
@@ -484,6 +606,7 @@ export class SceneManager {
 
 				mesh.checkCollisions = true;
 				mesh.isPickable = true;
+				if (mesh.material) mesh.material.maxSimultaneousLights = 10;
 
 				if (!mesh.material) {
 					const material = new StandardMaterial(
@@ -524,17 +647,16 @@ export class SceneManager {
 			return result;
 		} catch (error) {
 			console.warn("Failed to load corridor_baru.glb; memakai koridor cadangan:", error);
-			// Fallback to procedural corridor
-			this.createFallbackCorridor();
 			this.scene.getEngine().hideLoadingUI();
-			return null;
+			if (!fallback) return null;
+			const previousMeshes = new Set(this.scene.meshes);
+			this.createFallbackCorridor();
+			return { meshes: this.scene.meshes.filter((mesh) => !previousMeshes.has(mesh)) };
 		}
 	}
 
 	async createFullAsylum() {
-		// loadHorrorSceneGLB sudah membuat fallback dan mengembalikan null saat gagal.
-		await this.loadHorrorSceneGLB();
-		this.scene.getEngine().hideLoadingUI();
+		return this.loadHorrorSceneGLB();
 	}
 
 	// ---------------------------------------------------------------
@@ -694,7 +816,7 @@ export class SceneManager {
 	// Mencari tinggi lantai di bawah titik (x, z). Mengembalikan null jika tidak ketemu.
 	findFloorY(x, z) {
 		const ray = new Ray(
-			new Vector3(x, FLOOR_PROBE_HEIGHT, z),
+			new Vector3(x, this.floorProbeHeight ?? FLOOR_PROBE_HEIGHT, z),
 			new Vector3(0, -1, 0),
 			20
 		);
@@ -718,6 +840,7 @@ export class SceneManager {
 	makeMaterial(name, diffuse, emissive = null, specular = 0.05) {
 		const mat = new StandardMaterial(name, this.scene);
 		mat.diffuseColor = diffuse;
+		mat.maxSimultaneousLights = 10;
 		mat.specularColor = new Color3(specular, specular, specular);
 		if (emissive) mat.emissiveColor = emissive;
 		return mat;
@@ -742,7 +865,7 @@ export class SceneManager {
 
 			if (item.type === "battery") {
 				const mesh = this.systems.interactionManager.spawnBattery(
-					new Vector3(pos.x, FLOOR_PROBE_HEIGHT, pos.z),
+					new Vector3(pos.x, this.floorProbeHeight ?? FLOOR_PROBE_HEIGHT, pos.z),
 					data.amount ?? 30,
 					true
 				);
@@ -891,10 +1014,22 @@ export class SceneManager {
 		this.sceneObjects.forEach((obj) => {
 			if (obj && !obj.isDisposed()) {
 				this.systems.propLibrary?.removeHighlight(obj);
+				const anchorMaterial = obj.material;
+				const ownsMaterial = obj.name !== undefined && obj.material !== this.tableMaterial;
+				const propMaterials = obj.metadata?.propOwnedMaterials || [];
 				obj.dispose();
+				propMaterials.forEach((material) => material.dispose());
+				if (ownsMaterial) anchorMaterial?.dispose();
 			}
 		});
 		this.sceneObjects = [];
+		this.environmentMeshes.forEach((mesh) => {
+			if (!mesh.isDisposed()) mesh.dispose(false, true);
+		});
+		this.environmentMeshes = [];
+		this.safeZones = [];
+		this.systems.environmentManager.stopEntityPursuit();
+		this.systems.interactionManager.updateInteractionUI(null);
 
 		// Dispose of level builder resources
 		if (this.levelBuilder) {
@@ -905,11 +1040,9 @@ export class SceneManager {
 		// Clear interactables
 		this.systems.interactionManager.dispose();
 
-		// Sembunyikan monster jika sedang aktif
-		this.systems.monsterManager?.despawn();
 
 		// Stop ambient sounds
-		this.systems.audioManager.stopAmbient("ambient_asylum");
+		["ambient_asylum", "ambient_basement", "ambient_corridor", "generator_running", "entity_pursuit"].forEach((name) => this.systems.audioManager.stopAmbient(name));
 	}
 
 	getCurrentScene() {

@@ -12,6 +12,7 @@ export class PlayerController {
         this.lastFootstepTime = 0;
         this.footstepInterval = 500;
         this.collisionDistance = 0.6;
+        this.controlsLocked = false;
 
         // Flashlight system
         this.flashlight = null;
@@ -32,33 +33,52 @@ export class PlayerController {
     }
 
     setupControls() {
-        // Keyboard input
-        this.scene.onKeyboardObservable.add((kbInfo) => {
-            const key = kbInfo.event.key.toLowerCase();
-
-            if (kbInfo.type === 1) { // Key down
-                this.keys[key] = true;
-
-                if (key === 'f') {
-                    this.toggleFlashlight();
-                }
-                if (key === 'e') {
-                    this.systems.interactionManager.tryInteract();
-                }
-            } else if (kbInfo.type === 2) { // Key up
-                this.keys[key] = false;
-            }
+        // Keyboard input dipasang pada window agar tetap bekerja ketika fokus
+        // sedang berada pada overlay/menu atau canvas belum menerima fokus.
+        this.keyDownHandler = (event) => {
+            const target = event.target;
+            if (target?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName || '')) return;
+            const key = this.getInputKey(event);
+            if (this.controlsLocked || this.frozen) return;
+            this.keys[key] = true;
+            if (['w', 'a', 's', 'd', 'f', 'e'].includes(key)) event.preventDefault();
+            if (event.repeat) return;
+            if (key === 'f') this.toggleFlashlight();
+            if (key === 'e') this.systems.interactionManager.tryInteract();
+        };
+        this.keyUpHandler = (event) => {
+            this.keys[this.getInputKey(event)] = false;
+        };
+        window.addEventListener('keydown', this.keyDownHandler);
+        window.addEventListener('keyup', this.keyUpHandler);
+        this.blurHandler = () => this.resetInput();
+        window.addEventListener('blur', this.blurHandler);
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) this.resetInput();
         });
 
         // Mouse input
         this.scene.onPointerObservable.add((pointerInfo) => {
             if (pointerInfo.type === 4) { // Mouse move
                 if (document.pointerLockElement === this.scene.getEngine().getRenderingCanvas()) {
-                    this.mouseMovement.x = pointerInfo.event.movementX || 0;
-                    this.mouseMovement.y = pointerInfo.event.movementY || 0;
+                    if (this.controlsLocked || this.frozen) return;
+                    this.mouseMovement.x += pointerInfo.event.movementX || 0;
+                    this.mouseMovement.y += pointerInfo.event.movementY || 0;
                 }
             }
         });
+    }
+
+    getInputKey(event) {
+        const codes = { KeyW: 'w', KeyA: 'a', KeyS: 's', KeyD: 'd', KeyF: 'f', KeyE: 'e' };
+        return codes[event.code] || (event.key || '').toLowerCase();
+    }
+
+    resetInput() {
+        this.keys = {};
+        this.mouseMovement.x = 0;
+        this.mouseMovement.y = 0;
+        this.isMoving = false;
     }
 
     setupFlashlight() {
@@ -84,31 +104,45 @@ export class PlayerController {
         const canvas = this.scene.getEngine().getRenderingCanvas();
 
         canvas.addEventListener('click', () => {
-            canvas.requestPointerLock();
+            canvas.focus();
+            if (document.pointerLockElement === canvas) return;
+            try {
+                const request = canvas.requestPointerLock?.();
+                request?.catch((error) => {
+                    console.warn('Pointer lock ditolak; klik canvas untuk mencoba lagi.', error);
+                });
+            } catch (error) {
+                console.warn('Pointer lock tidak tersedia.', error);
+            }
         });
 
         document.addEventListener('pointerlockchange', () => {
             if (document.pointerLockElement !== canvas) {
-                // Pointer lock lost
+                this.resetInput();
             }
         });
     }
 
     update(deltaTime) {
-        this.handleMovement(deltaTime);
+        const dt = Number.isFinite(deltaTime) ? Math.min(Math.max(deltaTime, 0), 0.1) : 0;
+        if (this.controlsLocked || this.frozen) {
+            this.resetInput();
+            this.updateFlashlight(0);
+            this.updateUI();
+            return;
+        }
+        this.handleMovement(dt);
         this.handleMouseLook();
-        this.updateFlashlight(deltaTime);
-        this.updateFootsteps(deltaTime);
+        this.updateFlashlight(dt);
+        this.updateFootsteps(dt);
         this.updateUI();
     }
 
     handleMovement(deltaTime) {
-
-        if (this.frozen) {
+        if (this.controlsLocked || this.frozen) {
             this.isMoving = false;
             return;
         }
-
         const yaw = this.camera.rotation.y;
 
         // Arah horizontal berdasarkan putaran kamera (tidak terpengaruh melihat atas/bawah)
@@ -157,7 +191,8 @@ export class PlayerController {
                     !(mesh.metadata && mesh.metadata.isPickup)
             );
 
-            if (!hit || !hit.hit || hit.distance > this.collisionDistance) {
+            moving = step > 0 && (!hit || !hit.hit || hit.distance > this.collisionDistance);
+            if (moving) {
                 this.camera.position.addInPlace(direction.scale(step));
             }
         } else {
@@ -168,6 +203,7 @@ export class PlayerController {
     }
 
     handleMouseLook() {
+        if (this.controlsLocked || this.frozen) return;
         if (this.mouseMovement.x !== 0 || this.mouseMovement.y !== 0) {
             this.camera.rotation.y += this.mouseMovement.x * this.mouseSensitivity;
             this.camera.rotation.x += this.mouseMovement.y * this.mouseSensitivity;

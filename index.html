@@ -167,6 +167,7 @@
             justify-content: center;
             z-index: 1000;
             pointer-events: all;
+            cursor: auto;
         }
         
         .document-content {
@@ -284,14 +285,24 @@
         <div class="loading-subtitle">Loading asylum assets...</div>
     </div>
     
-    <!-- Click to Start -->
-    <div id="clickToStart" class="click-to-start" style="display: none;">
-        <div class="start-message">Click to Enter the Asylum</div>
-        <div class="start-subtitle">Audio and controls will be enabled</div>
+    <!-- Main menu -->
+    <div id="clickToStart" class="main-menu" style="display: none;">
+        <div class="menu-panel">
+            <p class="menu-kicker">BLACKWOOD ASYLUM · 1973</p>
+            <h1>SHADOWS OF THE ABANDONED</h1>
+            <p class="menu-subtitle">Something is still waiting in the dark.</p>
+            <div class="menu-actions">
+                <button id="playButton" type="button">Play</button>
+                <button id="controlsButton" type="button">Controls</button>
+                <button id="creditsButton" type="button">Credits</button>
+            </div>
+            <div id="menuInfo" class="menu-info" hidden></div>
+            <p class="menu-hint">Click Play to enter the asylum</p>
+        </div>
     </div>
     
     <!-- Game Canvas -->
-    <canvas id="gameCanvas"></canvas>
+    <canvas id="gameCanvas" tabindex="0" aria-label="Game view"></canvas>
     
     <!-- UI Overlay -->
     <div class="ui-overlay">
@@ -357,9 +368,34 @@
             document.getElementById('clickToStart').style.display = 'flex';
         }, 2000);
         
-        // Click to start handler
-        document.getElementById('clickToStart').addEventListener('click', () => {
-            document.getElementById('clickToStart').style.display = 'none';
+        const menu = document.getElementById('clickToStart');
+        const playButton = document.getElementById('playButton');
+        const controlsButton = document.getElementById('controlsButton');
+        const creditsButton = document.getElementById('creditsButton');
+        const menuInfo = document.getElementById('menuInfo');
+
+        controlsButton?.addEventListener('click', () => {
+            menuInfo.hidden = false;
+            menuInfo.textContent = 'WASD Move · Mouse Look · F Flashlight · E Interact · Space Skip intro';
+        });
+        creditsButton?.addEventListener('click', () => {
+            menuInfo.hidden = false;
+            menuInfo.textContent = 'Built with Babylon.js and Vite. Monster: “Smily Horror Monster” by Bento (Sketchfab), CC BY 4.0; adapted for this game. Source and license: public/assets/models/monster/README.md.';
+        });
+        playButton?.addEventListener('click', () => {
+            menu.style.display = 'none';
+            document.getElementById('loadingScreen').style.display = 'none';
+            const canvas = document.getElementById('gameCanvas');
+            canvas?.focus();
+            try {
+                const request = canvas?.requestPointerLock?.();
+                request?.catch((error) => {
+                    console.warn('Pointer lock ditolak; klik area game untuk mencoba lagi.', error);
+                });
+            } catch (error) {
+                console.warn('Pointer lock tidak tersedia; WASD tetap dapat digunakan.', error);
+            }
+            window.dispatchEvent(new CustomEvent('game-play-requested'));
         });
     </script>
 </body>
