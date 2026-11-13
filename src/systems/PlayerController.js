@@ -1,4 +1,4 @@
-import { Vector3, Ray, SpotLight, Color3 } from '@babylonjs/core';
+import { Vector3, SpotLight, Color3 } from '@babylonjs/core';
 
 export class PlayerController {
     constructor(camera, scene, systems) {
@@ -11,7 +11,6 @@ export class PlayerController {
         this.isMoving = false;
         this.lastFootstepTime = 0;
         this.footstepInterval = 500;
-        this.collisionDistance = 0.6; // jarak aman dari dinding
 
         // Flashlight system
         this.flashlight = null;
@@ -130,13 +129,15 @@ export class PlayerController {
         if (moving && moveVector.lengthSquared() > 0.0001) {
             moveVector.normalize();
             const direction = moveVector.clone();
-            const step = this.moveSpeed * deltaTime;
+            // Batasi langkah per frame agar tabrakan tetap stabil saat FPS turun.
+            const step = this.moveSpeed * Math.min(Math.max(deltaTime, 0), 0.05);
 
-            // Cek tabrakan di depan arah gerak
-            const ray = new Ray(this.camera.position, direction, step + this.collisionDistance);
-            const hit = this.scene.pickWithRay(ray, (mesh) => mesh.checkCollisions);
-
-            if (!hit || !hit.hit) {
+            // Gunakan ellipsoid kamera (radius tubuh pemain) milik Babylon.js.
+            // moveWithCollisions menangani sudut dan sisi tubuh, bukan hanya
+            // satu ray dari tengah kamera yang mudah melewati sudut tembok.
+            if (this.camera.checkCollisions && this.scene.collisionsEnabled) {
+                this.camera.moveWithCollisions(direction.scale(step));
+            } else {
                 this.camera.position.addInPlace(direction.scale(step));
             }
         } else {

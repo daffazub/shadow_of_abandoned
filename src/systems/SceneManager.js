@@ -478,21 +478,31 @@ export class SceneManager {
 				"meshes"
 			);
 
-			// Setup collision for all meshes
+			// Collision dan visibilitas untuk geometri koridor.
 			result.meshes.forEach((mesh, index) => {
-				if (mesh.name && mesh.geometry) {
-					mesh.checkCollisions = true;
+				if (!mesh.geometry) return;
 
-					// Ensure proper material for visibility
-					if (!mesh.material) {
-						const material = new StandardMaterial(
-							`corridor_mat_${index}`,
-							this.scene
-						);
-						material.diffuseColor = new Color3(0.4, 0.4, 0.4);
-						material.specularColor = new Color3(0.1, 0.1, 0.1);
-						mesh.material = material;
-					}
+				mesh.checkCollisions = true;
+				mesh.isPickable = true;
+
+				if (!mesh.material) {
+					const material = new StandardMaterial(
+						`corridor_mat_${index}`,
+						this.scene
+					);
+					material.diffuseColor = new Color3(0.4, 0.4, 0.4);
+					material.specularColor = new Color3(0.1, 0.1, 0.1);
+					mesh.material = material;
+				}
+
+				// Pengaman untuk GLB lama: sisi belakang koridor adalah dinding solid.
+				if (mesh.name === "BackSide_0" && mesh.material) {
+					const material = mesh.material;
+					material.alpha = 1;
+					if (material.albedoColor) material.albedoColor.a = 1;
+					if (material.diffuseColor) material.diffuseColor.a = 1;
+					material.useAlphaFromAlbedoTexture = false;
+					material.backFaceCulling = false;
 				}
 			});
 
@@ -508,9 +518,6 @@ export class SceneManager {
 				mesh.computeWorldMatrix(true);
 				if (mesh.geometry) mesh.refreshBoundingInfo();
 			});
-
-			// Add collision test markers (invisible in production)
-			this.addCollisionTestMarkers();
 
 			this.scene.getEngine().hideLoadingUI();
 			this.floorMatrixRetryDone = false;
@@ -900,28 +907,6 @@ export class SceneManager {
 
 		// Stop ambient sounds
 		this.systems.audioManager.stopAmbient("ambient_asylum");
-	}
-
-	addCollisionTestMarkers() {
-		// Kotak uji tabrakan tak terlihat (untuk memeriksa deteksi dinding)
-		const testPositions = [
-			new Vector3(-2, 1, 5), // Left wall test
-			new Vector3(2, 1, 5), // Right wall test
-			new Vector3(0, 1, 10), // Center corridor test
-			new Vector3(0, 1, 20), // Far corridor test
-		];
-
-		testPositions.forEach((pos, index) => {
-			const testBox = MeshBuilder.CreateBox(
-				`collision_test_${index}`,
-				{ size: 0.2 },
-				this.scene
-			);
-			testBox.position.copyFrom(pos);
-			testBox.isVisible = false;
-			testBox.checkCollisions = true;
-			testBox.metadata = { isDecor: true };
-		});
 	}
 
 	getCurrentScene() {
